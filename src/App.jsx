@@ -71,11 +71,27 @@ const App = () => {
     }
   };
 
+  const [copiedMaster, setCopiedMaster] = useState(false);
+
+  const extractMasterPrompt = (text) => {
+    // ## 5. 섹션 내의 코드 블록 추출
+    const match = text.match(/## 5\..*?```[\w]*\n([\s\S]*?)```/i);
+    return match ? match[1].trim() : null;
+  };
+
   const handleCopy = () => {
     if (!spec) return;
     navigator.clipboard.writeText(spec);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyMasterPrompt = () => {
+    const masterPrompt = extractMasterPrompt(spec);
+    if (!masterPrompt) return;
+    navigator.clipboard.writeText(masterPrompt);
+    setCopiedMaster(true);
+    setTimeout(() => setCopiedMaster(false), 2000);
   };
 
   return (
@@ -224,22 +240,42 @@ const App = () => {
                 <span className="text-[10px] uppercase text-cyber-cyan tracking-widest font-bold">
                   Generated_Spec.md
                 </span>
-                <button
-                  onClick={handleCopy}
-                  className="flex items-center gap-2 text-[10px] uppercase text-cyber-cyan-bright hover:text-white transition-colors"
-                >
-                  {copied ? (
-                    <>
-                      <Check className="w-3 h-3" />
-                      COPIED
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3 h-3" />
-                      COPY SPEC
-                    </>
+                <div className="flex gap-4">
+                  {extractMasterPrompt(spec) && (
+                    <button
+                      onClick={handleCopyMasterPrompt}
+                      className="flex items-center gap-2 text-[10px] uppercase text-yellow-500 hover:text-white transition-colors"
+                    >
+                      {copiedMaster ? (
+                        <>
+                          <Check className="w-3 h-3" />
+                          PROMPT COPIED
+                        </>
+                      ) : (
+                        <>
+                          <Zap className="w-3 h-3" />
+                          COPY MASTER PROMPT
+                        </>
+                      )}
+                    </button>
                   )}
-                </button>
+                  <button
+                    onClick={handleCopy}
+                    className="flex items-center gap-2 text-[10px] uppercase text-cyber-cyan-bright hover:text-white transition-colors"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-3 h-3" />
+                        COPIED
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" />
+                        COPY SPEC
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
               <div className="p-6 md:p-8 prose prose-invert prose-cyber max-w-none prose-p:text-gray-400 prose-headings:text-cyber-cyan prose-headings:tracking-tighter prose-code:text-cyber-cyan-bright prose-pre:bg-cyber-black/50 prose-pre:border prose-pre:border-cyber-cyan-dim">
                 <ReactMarkdown>{spec}</ReactMarkdown>
