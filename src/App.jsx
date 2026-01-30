@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert } from 'lucide-react';
+import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert, Settings, X, Key } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { transmuteVibeToSpec, fetchAvailableModels } from './lib/gemini';
 
@@ -8,8 +8,11 @@ const App = () => {
   const [vibe, setVibe] = useState('');
   const [spec, setSpec] = useState('');
   const [status, setStatus] = useState('idle'); // idle, processing, success, error
-  const [activeModel, setActiveModel] = useState('INITIALIZING...');
+  const [activeModel, setActiveModel] = useState('OFFLINE');
   const [copied, setCopied] = useState(false);
+  const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(!localStorage.getItem('gemini_api_key'));
+  const [tempKey, setTempKey] = useState('');
   const textareaRef = useRef(null);
 
   // Auto-expanding textarea
@@ -22,26 +25,42 @@ const App = () => {
 
   // Initial Neural Sync
   useEffect(() => {
-    async function sync() {
-      try {
-        const models = await fetchAvailableModels();
-        if (models && models.length > 0) {
-          // Default to the first one for display purposes until execution
-          setActiveModel(models[0].toUpperCase());
-        }
-      } catch (err) {
-        setActiveModel('LINK FAILURE');
-      }
+    if (apiKey) {
+      syncNeuralLink(apiKey);
     }
-    sync();
-  }, []);
+  }, [apiKey]);
+
+  const syncNeuralLink = async (key) => {
+    setActiveModel('SYNCING...');
+    try {
+      const models = await fetchAvailableModels(key);
+      if (models && models.length > 0) {
+        setActiveModel(models[0].toUpperCase());
+      }
+    } catch (err) {
+      setActiveModel('LINK FAILURE');
+    }
+  };
+
+  const handleSaveKey = () => {
+    if (tempKey.trim()) {
+      localStorage.setItem('gemini_api_key', tempKey.trim());
+      setApiKey(tempKey.trim());
+      setIsSettingsOpen(false);
+      setTempKey('');
+    }
+  };
 
   const handleTransmute = async () => {
     if (!vibe.trim()) return;
+    if (!apiKey) {
+      setIsSettingsOpen(true);
+      return;
+    }
 
     setStatus('processing');
     try {
-      const { content, model } = await transmuteVibeToSpec(vibe);
+      const { content, model } = await transmuteVibeToSpec(vibe, apiKey);
       setSpec(content);
       setActiveModel(model.toUpperCase());
       setStatus('success');
@@ -71,9 +90,17 @@ const App = () => {
             Vibe-to-Spec Transmuter
           </h1>
         </div>
-        <div className="hidden md:flex items-center gap-2 text-[10px] text-cyber-cyan-bright opacity-50">
-          <Terminal className="w-3 h-3" />
-          <span>NEURAL LINK: {activeModel}</span>
+        <div className="flex items-center gap-4">
+          <div className="hidden md:flex items-center gap-2 text-[10px] text-cyber-cyan-bright opacity-50 border-r border-cyber-cyan-dim pr-4 mr-2">
+            <Terminal className="w-3 h-3" />
+            <span>NEURAL LINK: {activeModel}</span>
+          </div>
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="p-2 hover:bg-cyber-cyan-dim rounded-sm transition-colors text-cyber-cyan"
+          >
+            <Settings className="w-5 h-5" />
+          </button>
         </div>
       </header>
 
@@ -98,8 +125,22 @@ const App = () => {
                 onChange={(e) => setVibe(e.target.value)}
                 placeholder="어떤 멋진 것을 만들고 싶으신가요? 분위기나 아이디어를 자유롭게 입력하세요..."
                 className="w-full bg-transparent p-6 outline-none resize-none min-h-[160px] text-cyber-cyan placeholder:text-cyber-cyan/30 text-lg leading-relaxed transition-all duration-300 focus:shadow-[inset_0_0_20px_rgba(0,240,255,0.05)]"
-                disabled={status === 'processing'}
+                disabled={status === 'processing' || !apiKey}
               />
+
+              {!apiKey && (
+                <div className="absolute inset-0 bg-cyber-black/80 backdrop-blur-sm flex items-center justify-center p-6 text-center">
+                  <div className="flex flex-col items-center gap-4 max-w-xs">
+                    <ShieldAlert className="w-12 h-12 text-yellow-500 animate-pulse" />
+                    <p className="text-cyber-cyan font-bold uppercase tracking-widest text-sm">
+                      Neural Link Offline
+                    </p>
+                    <p className="text-gray-400 text-xs leading-relaxed">
+                      시스템을 가동하려면 우측 상단 설정을 통해 API 키를 입력해 주세요.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Mechanical Scan Overlay */}
               <AnimatePresence>
@@ -140,11 +181,11 @@ const App = () => {
         <div className="flex justify-center md:justify-end">
           <button
             onClick={handleTransmute}
-            disabled={status === 'processing' || !vibe.trim()}
+            disabled={status === 'processing' || !vibe.trim() || !apiKey}
             className={`
               relative px-12 py-4 bg-cyber-cyan text-cyber-black font-extrabold uppercase tracking-[0.15em] transition-all duration-200 
               disabled:opacity-30 disabled:cursor-not-allowed glitch-hover
-              ${vibe.trim() ? 'hover:shadow-[0_0_25px_rgba(0,240,255,0.6)] cursor-pointer' : ''}
+              ${(vibe.trim() && apiKey) ? 'hover:shadow-[0_0_25px_rgba(0,240,255,0.6)] cursor-pointer' : ''}
             `}
           >
             {status === 'processing' ? 'Transmuting...' : 'Transmute Now'}
@@ -165,7 +206,7 @@ const App = () => {
               <ShieldAlert className="w-5 h-5" />
               <div className="flex flex-col">
                 <span className="font-bold">연결 실패: 신경망 링크가 불안정합니다.</span>
-                <span className="text-[10px] opacity-70 italic">API 키가 유효하지 않거나 할당량이 초과되었을 수 있습니다. .env.local 파일을 확인하세요.</span>
+                <span className="text-[10px] opacity-70 italic">입력된 API 키가 유효하지 않거나 할당량이 초과되었을 수 있습니다. 설정을 확인해 주세요.</span>
               </div>
             </motion.div>
           )}
@@ -208,11 +249,72 @@ const App = () => {
         </AnimatePresence>
       </section>
 
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => apiKey && setIsSettingsOpen(false)}
+              className="absolute inset-0 bg-cyber-black/90 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-md bg-[#0a0a0a] border border-cyber-cyan rounded-sm p-8 shadow-[0_0_50px_rgba(0,240,255,0.1)]"
+            >
+              <div className="flex flex-col gap-6">
+                <div className="flex items-center justify-between border-b border-cyber-cyan-dim pb-4">
+                  <div className="flex items-center gap-2">
+                    <Key className="w-5 h-5 text-cyber-cyan" />
+                    <h2 className="text-lg font-bold text-cyber-cyan tracking-widest uppercase">Neural Settings</h2>
+                  </div>
+                  {apiKey && (
+                    <button onClick={() => setIsSettingsOpen(false)} className="text-gray-500 hover:text-white transition-colors">
+                      <X className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] text-cyber-cyan uppercase font-bold tracking-widest opacity-70">
+                      Gemini API Key
+                    </label>
+                    <input
+                      type="password"
+                      value={tempKey}
+                      onChange={(e) => setTempKey(e.target.value)}
+                      placeholder={apiKey ? "개인용 API 키가 이미 등록되어 있습니다..." : "발급받은 개인용 API 키를 입력하세요..."}
+                      className="w-full bg-cyber-black/50 border border-cyber-cyan-dim p-4 outline-none focus:border-cyber-cyan text-cyber-cyan transition-all font-mono"
+                    />
+                    <p className="text-[10px] text-gray-500 leading-relaxed italic">
+                      * 입력하신 기는 브라우저의 로컬 저장소에만 보관되며 서버로 전송되지 않습니다.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={handleSaveKey}
+                    disabled={!tempKey.trim()}
+                    className="w-full py-4 bg-cyber-cyan-dim hover:bg-cyber-cyan text-cyber-cyan hover:text-cyber-black font-bold uppercase tracking-widest transition-all duration-300 border border-cyber-cyan disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    Save & Synchronize
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <footer className="mt-20 w-full max-w-4xl border-t border-cyber-cyan-dim/20 pt-8 flex flex-col md:flex-row justify-between items-center text-[10px] text-cyber-cyan/30 gap-4">
         <p>© 2026 ANTIGRAVITY SYSTEMS. ALL RIGHTS RESERVED.</p>
         <div className="flex gap-6">
           <span>ENCRYPTION: AES-256</span>
-          <span>PROTOCOL: GEMINI-V1.5</span>
+          <span>PROTOCOL: GEMINI-CLIENT-DIRECT</span>
         </div>
       </footer>
     </main>
