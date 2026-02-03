@@ -65,7 +65,8 @@ const App = () => {
       setActiveModel(model.toUpperCase());
       setStatus('success');
     } catch (error) {
-      console.error(error);
+      // console.error(error); // Sensitive data could be leaked here
+      console.error("Transmutation failed: Neural link disruption detected.");
       setStatus('error');
       setActiveModel('LINK FAILURE');
     }

@@ -44,7 +44,11 @@ export async function fetchAvailableModels(apiKey) {
   if (!apiKey) return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"];
 
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models`, {
+      headers: {
+        'x-goog-api-key': apiKey
+      }
+    });
     const data = await response.json();
 
     if (data.models) {
@@ -56,7 +60,8 @@ export async function fetchAvailableModels(apiKey) {
       return availableModels;
     }
   } catch (error) {
-    console.warn("Neural sync failed, using default sequence:", error);
+    // Sanitize error to prevent leaking key in logs
+    console.warn("Neural sync failed, using default sequence.");
   }
   return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"];
 }
