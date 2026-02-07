@@ -5,11 +5,16 @@ import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert, Settings, X, Key, Brain, 
 import ReactMarkdown from 'react-markdown';
 import { transmuteVibeToSpec, fetchAvailableModels } from './lib/gemini';
 
+// Browser storage key used for Gemini API key persistence.
 const API_KEY_STORAGE_KEY = 'gemini_api_key';
+// UI feedback timeout for copy actions.
 const CLIPBOARD_RESET_MS = 2000;
+// Canonical concept flow used to sort glossary entries.
 const FLOW_STAGES = ['Webhook', 'Parsing', 'Data Sync', 'Source of Truth'];
+// Highlight duration after glossary-to-content jump.
 const FOCUS_HIGHLIGHT_MS = 2200;
 
+// Top-level output tabs shown in the result panel.
 const TABS = [
   { id: 'nondev', label: '비전공자', icon: User },
   { id: 'dev', label: '개발자', icon: Code },
@@ -17,19 +22,23 @@ const TABS = [
   { id: 'glossary', label: '용어', icon: BookOpen },
 ];
 
+// Reads API key from session first, then local storage fallback.
 function getStoredApiKey() {
   return sessionStorage.getItem(API_KEY_STORAGE_KEY) || localStorage.getItem(API_KEY_STORAGE_KEY) || '';
 }
 
+// Ensures glossary flow stage always maps to a known lane.
 function normalizeFlowStage(stage) {
   return FLOW_STAGES.includes(stage) ? stage : 'Source of Truth';
 }
 
+// Generates stable DOM-friendly IDs for glossary term cards.
 function makeTermId(term, idx) {
   const normalized = String(term || '').toLowerCase().replace(/[^a-z0-9가-힣]+/g, '-').replace(/^-+|-+$/g, '');
   return normalized ? `term-${normalized}-${idx}` : `term-${idx}`;
 }
 
+// Fallback markdown builder for thinking tab when structured UI is off.
 function buildThinkingMarkdown(thinking) {
   if (!thinking) return '';
 
@@ -48,6 +57,7 @@ function buildThinkingMarkdown(thinking) {
   return `## 문제 재진술\n${thinking.interpretation || ''}\n\n## 가정\n${assumptions || '- 없음'}\n\n## 불확실 / 질문\n${uncertainties || '- 없음'}\n\n## 대안 비교\n${alternatives || '- 없음'}`;
 }
 
+// Fallback markdown builder for glossary tab when needed.
 function buildGlossaryMarkdown(glossary) {
   if (!glossary?.length) return '';
   return glossary
@@ -55,6 +65,7 @@ function buildGlossaryMarkdown(glossary) {
     .join('\n\n');
 }
 
+// Maps decision semantics to color-coded badge styles.
 function getDecisionBadge(decision) {
   const normalized = String(decision || '').toLowerCase();
   if (normalized.includes('adopt') || normalized.includes('추천')) {
@@ -66,11 +77,13 @@ function getDecisionBadge(decision) {
   return { label: '보류', className: 'text-orange-300 border-orange-500/40 bg-orange-500/10' };
 }
 
+// Boundary check helper to avoid matching inside larger words.
 function isWordLike(char) {
   return /[A-Za-z0-9_가-힣]/.test(char || '');
 }
 
 function App() {
+  // Core user input and generation result states. {
   const [vibe, setVibe] = useState('');
   const [result, setResult] = useState(null);
   const [status, setStatus] = useState('idle');
@@ -87,15 +100,18 @@ function App() {
   const [pendingGlossaryFocusTermId, setPendingGlossaryFocusTermId] = useState(null);
   const [pendingContentScrollTermId, setPendingContentScrollTermId] = useState(null);
 
+    // API key and settings modal controls.
   const [apiKey, setApiKey] = useState(getStoredApiKey);
   const [isSettingsOpen, setIsSettingsOpen] = useState(!getStoredApiKey());
   const [rememberThisDevice, setRememberThisDevice] = useState(Boolean(localStorage.getItem(API_KEY_STORAGE_KEY)));
   const [tempKey, setTempKey] = useState('');
 
+    // Refs for textarea sizing, content scrolling, and glossary focus.
   const textareaRef = useRef(null);
   const contentContainerRef = useRef(null);
   const glossaryCardRefs = useRef({});
 
+    // Normalized glossary list with aliases and flow stage ordering.
   const glossaryItems = useMemo(() => {
     const raw = result?.glossary || [];
 
@@ -113,6 +129,7 @@ function App() {
       .sort((a, b) => FLOW_STAGES.indexOf(a.flow_stage) - FLOW_STAGES.indexOf(b.flow_stage));
   }, [result]);
 
+    // Search matchers used for in-content term highlighting.
   const matchers = useMemo(() => {
     const list = [];
     glossaryItems.forEach((item) => {
@@ -198,6 +215,7 @@ function App() {
     setPendingContentScrollTermId(null);
   }, [activeTab, pendingContentScrollTermId, currentTabMarkdown]);
 
+    // Persists API key according to remember toggle policy.
   const handleSaveKey = () => {
     const key = tempKey.trim();
     if (!key) return;
@@ -214,6 +232,7 @@ function App() {
     setTempKey('');
   };
 
+    // Main generate action triggered by Transmute button.
   const handleTransmute = async () => {
     if (!vibe.trim()) return;
     if (!apiKey) {
@@ -238,6 +257,7 @@ function App() {
     }
   };
 
+    // Shared clipboard helper with temporary success indicator.
   const copyToClipboardWithFeedback = (text, setFlag) => {
     if (!text) return;
     navigator.clipboard.writeText(text);
@@ -253,6 +273,7 @@ function App() {
     copyToClipboardWithFeedback(result?.artifacts?.master_prompt, setCopiedMaster);
   };
 
+    // Injects glossary request template into input for quick iteration.
   const handleUseTemplate = (template) => {
     const text = String(template || '').trim();
     if (!text) return;
@@ -261,6 +282,7 @@ function App() {
     setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
+    // Navigates from glossary card to first matching location in content.
   const handleGlossaryCardClick = (termId) => {
     const termItem = glossaryItems.find((item) => item.id === termId);
     const terms = termItem?.searchTerms || [];
@@ -287,12 +309,14 @@ function App() {
     window.setTimeout(() => setFocusedTermId(null), FOCUS_HIGHLIGHT_MS);
   };
 
+    // Navigates from highlighted content term back to glossary card.
   const handleTermClickFromContent = useCallback((termId) => {
     setSelectedTermId(termId);
     setActiveTab('glossary');
     setPendingGlossaryFocusTermId(termId);
   }, []);
 
+    // Finds earliest valid term match in a text node with boundary checks.
   const findFirstMatch = useCallback((textLower, textOriginal, startIndex = 0) => {
     let best = null;
 
@@ -317,6 +341,7 @@ function App() {
     return best;
   }, [matchers]);
 
+    // Rewrites text nodes into highlighted clickable term chips.
   const highlightTextNode = useCallback((text, keyPrefix) => {
     if (!text || !matchers.length) return text;
 
@@ -361,6 +386,7 @@ function App() {
     return parts;
   }, [findFirstMatch, focusedTermId, handleTermClickFromContent, matchers.length, selectedTermId]);
 
+    // Recursively applies term highlighting to markdown-rendered content.
   const renderHighlightedChildren = useCallback(function renderNodeChildren(children, keyPrefix = 'node') {
     return React.Children.map(children, (child, idx) => {
       const key = `${keyPrefix}-${idx}`;
@@ -380,6 +406,7 @@ function App() {
     });
   }, [highlightTextNode]);
 
+    // Custom markdown component map to inject highlighted term spans.
   const markdownComponents = useMemo(() => {
     const wrap = (Tag) => ({ children, ...props }) => <Tag {...props}>{renderHighlightedChildren(children, Tag)}</Tag>;
     return {
@@ -556,9 +583,31 @@ function App() {
                     {!showThinking && <ReactMarkdown>{currentTabMarkdown}</ReactMarkdown>}
                     {showThinking && thinking && (
                       <div className="not-prose space-y-6">
-                        <section className="space-y-2"><h3 className="text-cyber-cyan font-bold text-lg">문제 재진술</h3><p className="text-gray-300 leading-relaxed">{thinking.interpretation || '-'}</p></section>
-                        <section className="space-y-2"><h3 className="text-cyber-cyan font-bold text-lg">가정</h3><ul className="list-disc pl-5 text-gray-300 space-y-1">{(thinking.assumptions || []).length === 0 && <li>-</li>}{(thinking.assumptions || []).map((item, idx) => <li key={`assumption-${idx}`}>{item}</li>)}</ul></section>
-                        <section className="space-y-2"><h3 className="text-cyber-cyan font-bold text-lg">불확실 / 질문</h3><ul className="list-disc pl-5 text-gray-300 space-y-1">{(thinking.uncertainties || []).length === 0 && <li>-</li>}{(thinking.uncertainties || []).map((item, idx) => <li key={`uncertainty-${idx}`}>{item}</li>)}</ul></section>
+                        <section className="space-y-2">
+                          <h3 className="text-cyber-cyan font-bold text-lg">문제 재진술</h3>
+                          <p className="text-gray-300 leading-relaxed">{thinking.interpretation || '-'}</p>
+                        </section>
+
+                        <section className="space-y-2">
+                          <h3 className="text-cyber-cyan font-bold text-lg">가정</h3>
+                          <ul className="list-disc pl-5 text-gray-300 space-y-1">
+                            {(thinking.assumptions || []).length === 0 && <li>-</li>}
+                            {(thinking.assumptions || []).map((item, idx) => (
+                              <li key={`assumption-${idx}`}>{item}</li>
+                            ))}
+                          </ul>
+                        </section>
+
+                        <section className="space-y-2">
+                          <h3 className="text-cyber-cyan font-bold text-lg">불확실 / 질문</h3>
+                          <ul className="list-disc pl-5 text-gray-300 space-y-1">
+                            {(thinking.uncertainties || []).length === 0 && <li>-</li>}
+                            {(thinking.uncertainties || []).map((item, idx) => (
+                              <li key={`uncertainty-${idx}`}>{item}</li>
+                            ))}
+                          </ul>
+                        </section>
+
                         <section className="space-y-4">
                           <h3 className="text-cyber-cyan font-bold text-lg">대안 비교</h3>
                           {(thinking.alternatives || []).length === 0 && <p className="text-gray-300">-</p>}
@@ -566,11 +615,37 @@ function App() {
                             const decision = getDecisionBadge(alt.decision);
                             return (
                               <article key={`alternative-${idx}`} className="border border-cyber-cyan-dim rounded-md p-4 bg-cyber-black/40 space-y-4">
-                                <div className="flex items-center justify-between gap-3 flex-wrap"><h4 className="text-cyber-cyan-bright font-bold text-base">대안 {idx + 1} ({alt.name || 'N/A'})</h4><span className={`text-xs md:text-sm px-2.5 py-1 rounded border ${decision.className}`}>판단: {decision.label}</span></div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <div className="border border-green-500/30 rounded p-3 bg-green-500/5"><p className="text-green-300 font-bold mb-2">장점</p><ul className="list-disc pl-5 text-gray-200 space-y-1">{(alt.pros || []).length === 0 && <li>-</li>}{(alt.pros || []).map((item, pIdx) => <li key={`pros-${idx}-${pIdx}`}>{item}</li>)}</ul></div>
-                                  <div className="border border-red-500/30 rounded p-3 bg-red-500/5"><p className="text-red-300 font-bold mb-2">단점</p><ul className="list-disc pl-5 text-gray-200 space-y-1">{(alt.cons || []).length === 0 && <li>-</li>}{(alt.cons || []).map((item, cIdx) => <li key={`cons-${idx}-${cIdx}`}>{item}</li>)}</ul></div>
+                                <div className="flex items-center justify-between gap-3 flex-wrap">
+                                  <h4 className="text-cyber-cyan-bright font-bold text-base">
+                                    대안 {idx + 1} ({alt.name || 'N/A'})
+                                  </h4>
+                                  <span className={`text-xs md:text-sm px-2.5 py-1 rounded border ${decision.className}`}>
+                                    판단: {decision.label}
+                                  </span>
                                 </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <div className="border border-green-500/30 rounded p-3 bg-green-500/5">
+                                    <p className="text-green-300 font-bold mb-2">장점</p>
+                                    <ul className="list-disc pl-5 text-gray-200 space-y-1">
+                                      {(alt.pros || []).length === 0 && <li>-</li>}
+                                      {(alt.pros || []).map((item, pIdx) => (
+                                        <li key={`pros-${idx}-${pIdx}`}>{item}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+
+                                  <div className="border border-red-500/30 rounded p-3 bg-red-500/5">
+                                    <p className="text-red-300 font-bold mb-2">단점</p>
+                                    <ul className="list-disc pl-5 text-gray-200 space-y-1">
+                                      {(alt.cons || []).length === 0 && <li>-</li>}
+                                      {(alt.cons || []).map((item, cIdx) => (
+                                        <li key={`cons-${idx}-${cIdx}`}>{item}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                </div>
+
                                 {alt.reason && <p className="text-sm text-gray-300">이유: {alt.reason}</p>}
                               </article>
                             );
@@ -598,8 +673,20 @@ function App() {
                     <section className="flex items-center justify-between gap-3 flex-wrap">
                       <h3 className="text-cyber-cyan font-bold text-lg">용어 네비게이터</h3>
                       <div className="inline-flex border border-cyber-cyan-dim rounded overflow-hidden text-xs md:text-sm">
-                        <button type="button" onClick={() => setGlossaryLevel('beginner')} className={`px-3 py-1.5 ${glossaryLevel === 'beginner' ? 'bg-cyber-cyan text-black' : 'text-cyber-cyan'}`}>초급</button>
-                        <button type="button" onClick={() => setGlossaryLevel('practical')} className={`px-3 py-1.5 ${glossaryLevel === 'practical' ? 'bg-cyber-cyan text-black' : 'text-cyber-cyan'}`}>실무</button>
+                        <button
+                          type="button"
+                          onClick={() => setGlossaryLevel('beginner')}
+                          className={`px-3 py-1.5 ${glossaryLevel === 'beginner' ? 'bg-cyber-cyan text-black' : 'text-cyber-cyan'}`}
+                        >
+                          초급
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setGlossaryLevel('practical')}
+                          className={`px-3 py-1.5 ${glossaryLevel === 'practical' ? 'bg-cyber-cyan text-black' : 'text-cyber-cyan'}`}
+                        >
+                          실무
+                        </button>
                       </div>
                     </section>
 
@@ -617,7 +704,9 @@ function App() {
                             className={`rounded-md border p-4 space-y-3 ${active ? 'border-cyber-cyan bg-cyber-cyan/10' : 'border-cyber-cyan-dim bg-cyber-black/40'}`}
                           >
                             <div className="flex items-center justify-between gap-3 flex-wrap">
-                              <h4 className="text-cyber-cyan-bright font-bold text-base">{idx + 1}. {item.term || '용어'}</h4>
+                              <h4 className="text-cyber-cyan-bright font-bold text-base">
+                                {idx + 1}. {item.term || '용어'}
+                              </h4>
                               <span className="text-xs px-2.5 py-1 rounded border border-cyber-cyan-dim text-cyber-cyan">{item.flow_stage}</span>
                             </div>
 
@@ -630,24 +719,44 @@ function App() {
                               <p className="text-yellow-100/90 text-sm">{item.decision_point || '-'}</p>
                             </div>
 
-                            {glossaryLevel === 'beginner' && <div className="rounded border border-cyber-cyan-dim bg-cyber-black/40 px-3 py-2 text-sm text-gray-300">초급 가이드: {item.beginner_note || '-'}</div>}
+                            {glossaryLevel === 'beginner' && (
+                              <div className="rounded border border-cyber-cyan-dim bg-cyber-black/40 px-3 py-2 text-sm text-gray-300">
+                                초급 가이드: {item.beginner_note || '-'}
+                              </div>
+                            )}
 
                             {glossaryLevel === 'practical' && (
                               <div className="space-y-2">
-                                <div className="rounded border border-cyber-cyan-dim bg-cyber-black/40 px-3 py-2 text-sm text-gray-300">실무 가이드: {item.practical_note || '-'}</div>
+                                <div className="rounded border border-cyber-cyan-dim bg-cyber-black/40 px-3 py-2 text-sm text-gray-300">
+                                  실무 가이드: {item.practical_note || '-'}
+                                </div>
                                 <div className="rounded border border-orange-500/40 bg-orange-500/10 px-3 py-2">
                                   <p className="text-orange-300 font-semibold text-sm">실무에서 흔한 실수</p>
                                   <ul className="list-disc pl-5 text-orange-100/90 text-sm space-y-1">
                                     {(item.common_mistakes || []).length === 0 && <li>-</li>}
-                                    {(item.common_mistakes || []).map((mistake, mIdx) => <li key={`${item.id}-mistake-${mIdx}`}>{mistake}</li>)}
+                                    {(item.common_mistakes || []).map((mistake, mIdx) => (
+                                      <li key={`${item.id}-mistake-${mIdx}`}>{mistake}</li>
+                                    ))}
                                   </ul>
                                 </div>
                               </div>
                             )}
 
                             <div className="flex flex-wrap gap-2 pt-1">
-                              <button type="button" onClick={() => handleGlossaryCardClick(item.id)} className="text-xs md:text-sm px-3 py-1.5 rounded border border-cyber-cyan text-cyber-cyan hover:bg-cyber-cyan/20">본문에서 위치 보기</button>
-                              <button type="button" onClick={() => handleUseTemplate(item.request_template)} className="text-xs md:text-sm px-3 py-1.5 rounded border border-green-500/40 text-green-300 hover:bg-green-500/10">🔧 이 개념 기준으로 수정 요청 만들기</button>
+                              <button
+                                type="button"
+                                onClick={() => handleGlossaryCardClick(item.id)}
+                                className="text-xs md:text-sm px-3 py-1.5 rounded border border-cyber-cyan text-cyber-cyan hover:bg-cyber-cyan/20"
+                              >
+                                본문에서 위치 보기
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUseTemplate(item.request_template)}
+                                className="text-xs md:text-sm px-3 py-1.5 rounded border border-green-500/40 text-green-300 hover:bg-green-500/10"
+                              >
+                                🔧 이 개념 기준으로 수정 요청 만들기
+                              </button>
                             </div>
                           </article>
                         );
@@ -723,3 +832,4 @@ function App() {
 }
 
 export default App;
+

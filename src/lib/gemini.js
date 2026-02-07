@@ -1,9 +1,13 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+﻿import { GoogleGenerativeAI } from '@google/generative-ai';
 
+// Public API endpoint for model capability discovery.
 const MODELS_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
+// Safe defaults used when model discovery is unavailable.
 const DEFAULT_MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'];
+// Preferred model order for generation quality/speed balance.
 const PREFERENCE_ORDER = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro'];
 
+// Prompt-level JSON contract expected from the model.
 const JSON_SCHEMA_HINT = `{
   "model": "string",
   "artifacts": {
@@ -44,6 +48,7 @@ const JSON_SCHEMA_HINT = `{
   ]
 }`;
 
+// Core instructional prompt for educational transmutation behavior.
 const BASE_SYSTEM_PROMPT = `
 You are the "Vibe-to-Spec Transmuter" for an educational MVP.
 Goal: Help non-developers learn engineering thinking and express change requests clearly.
@@ -68,8 +73,10 @@ OUTPUT RULES (MUST FOLLOW):
 8) For each glossary item, at least one of term/aliases must appear verbatim in nondev_spec_md or dev_spec_md.
 `;
 
+// In-memory cache to reduce repeated model list fetches.
 let availableModels = [];
 
+// Removes code fences if model returns JSON inside markdown blocks.
 function extractJsonText(text) {
   if (!text || typeof text !== 'string') return '';
 
@@ -80,6 +87,7 @@ function extractJsonText(text) {
   return withoutFenceStart.replace(/```\s*$/, '').trim();
 }
 
+// Normalizes model output to keep UI contracts stable.
 function normalizeResult(raw, fallbackModel) {
   const safe = raw && typeof raw === 'object' ? raw : {};
   const artifacts = safe.artifacts && typeof safe.artifacts === 'object' ? safe.artifacts : {};
@@ -124,6 +132,7 @@ function normalizeResult(raw, fallbackModel) {
   };
 }
 
+// Builds base prompt or repair prompt for second-pass JSON recovery.
 function buildPrompt(vibe, showThinking, retryPayload = null) {
   if (retryPayload) {
     return `Your previous response was invalid JSON. Fix it now. Return JSON only and strictly follow schema.\nSchema:\n${JSON_SCHEMA_HINT}\nPrevious output:\n${retryPayload}`;
@@ -132,6 +141,7 @@ function buildPrompt(vibe, showThinking, retryPayload = null) {
   return `SYSTEM:\n${BASE_SYSTEM_PROMPT}\n\nJSON Schema Shape:\n${JSON_SCHEMA_HINT}\n\nUser vibe:\n${vibe}\n\nRuntime option: showThinking=${showThinking ? 'ON' : 'OFF'}.\nIf OFF, keep layers.L1_thinking concise but present.`;
 }
 
+// Executes one model generation call and returns raw text.
 async function generateJson(model, vibe, showThinking, retryPayload = null) {
   const prompt = buildPrompt(vibe, showThinking, retryPayload);
   const result = await model.generateContent(prompt);
@@ -139,6 +149,7 @@ async function generateJson(model, vibe, showThinking, retryPayload = null) {
   return response.text();
 }
 
+// Parses JSON with one retry path when first parse fails.
 async function parseJsonWithOneRetry(model, vibe, showThinking) {
   const firstText = await generateJson(model, vibe, showThinking);
 
@@ -150,9 +161,7 @@ async function parseJsonWithOneRetry(model, vibe, showThinking) {
   }
 }
 
-/**
- * Extracts the list of available models from the API.
- */
+// Synchronizes available generation models for the provided API key.
 export async function fetchAvailableModels(apiKey) {
   if (!apiKey) return DEFAULT_MODELS;
 
@@ -178,6 +187,7 @@ export async function fetchAvailableModels(apiKey) {
   return DEFAULT_MODELS;
 }
 
+// Picks best available model according to preference order.
 async function getOptimalModel(apiKey) {
   if (availableModels.length === 0) {
     availableModels = await fetchAvailableModels(apiKey);
@@ -190,6 +200,7 @@ async function getOptimalModel(apiKey) {
   return availableModels[0] || DEFAULT_MODELS[0];
 }
 
+// Main public API used by the UI to generate normalized educational specs.
 export async function transmuteVibeToSpec(vibe, apiKey, { showThinking = true } = {}) {
   if (!apiKey) {
     throw new Error('API key is missing.');
@@ -207,3 +218,4 @@ export async function transmuteVibeToSpec(vibe, apiKey, { showThinking = true } 
     throw new Error('Transmutation interrupted by model or JSON parsing failure.');
   }
 }
+

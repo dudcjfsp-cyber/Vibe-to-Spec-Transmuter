@@ -1,33 +1,39 @@
 # Vibe-to-Spec Transmuter
 
-비전공자의 추상 아이디어(vibe)를 개발 가능한 스펙으로 변환하는 교육용 MVP입니다.
+Vibe-to-Spec Transmuter is an educational MVP that converts abstract user intent ("vibe") into implementation-ready technical specs.
 
-## 목적
-- 비전공자가 개발 사고를 학습하도록 돕기
-- 개발자가 빠르게 구현 판단 가능한 스펙 제공
-- 수정 요청 문장을 구체적으로 말할 수 있게 지원
+## Goals
+- Help non-developers understand engineering thinking.
+- Give developers a spec they can implement with minimal clarification.
+- Help users turn feedback into concrete change requests.
 
-## 핵심 기능
-- Gemini 기반 스펙 생성 엔진
-  - JSON 출력 강제
-  - 파싱 실패 시 1회 자동 재요청
-- L1/L2/L3 구조 출력
-  - L1 사고: 문제 재진술, 가정, 불확실 질문, 대안 비교
-  - L2 번역: 비전공자/개발자 문서 분리
-  - L3 실행: 구현 옵션 + 마스터 프롬프트
-- 탭 UI
-  - 비전공자 / 개발자 / 사고 / 용어
-- 학습 모드 토글
-- 복사 버튼
-  - 개발자 스펙 복사
-  - 마스터 프롬프트 복사
+## Current Features
+- Gemini-based spec generation engine.
+  - JSON-only output contract.
+  - One automatic retry when JSON parsing fails.
+- Layered output format (L1 / L2 / L3).
+  - L1 Thinking: interpretation, assumptions, uncertainties, alternatives.
+  - L2 Translation: non-dev and dev spec artifacts.
+  - L3 Execution: implementation options and master prompt.
+- Learning mode toggle (ON/OFF).
+- Tab UI:
+  - Non-dev / Dev / Thinking / Glossary
+- Glossary navigator upgrades:
+  - Concept flow map: `Webhook -> Parsing -> Data Sync -> Source of Truth`
+  - Difficulty toggle: Beginner / Practical
+  - Decision point, practical mistakes, request template per term
+  - Glossary-to-content and content-to-glossary navigation
+  - In-content term highlighting and focus behavior
+- Copy actions:
+  - Copy dev spec
+  - Copy master prompt
 
-## API 키 저장 정책
-- 기본: `sessionStorage`
-- 옵션: "이 기기에서 기억하기" 체크 시 `localStorage` 저장
-- 체크 해제 시 `localStorage` 키 즉시 제거
+## API Key Storage Policy
+- Default: `sessionStorage`
+- Optional: "Remember on this device" uses `localStorage`
+- Unchecking removes key from `localStorage` immediately
 
-## 기술 스택
+## Tech Stack
 - React 19
 - Vite 7
 - Tailwind CSS 4
@@ -35,32 +41,36 @@
 - `@google/generative-ai`
 - React Markdown
 
-## 로컬 실행
+## Local Run
 ```bash
 npm install
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-## 린트
+Open:
+- `http://127.0.0.1:5173`
+
+## Lint
 ```bash
 npm run lint
 ```
 
-## 배포
-GitHub Pages 자동 배포를 사용합니다.
+## Deployment
+GitHub Pages auto deployment is enabled.
 
-- 워크플로우: `.github/workflows/deploy.yml`
-- 트리거: `main` 브랜치 push
-- 빌드 결과: `dist` -> `gh-pages`
+- Workflow: `.github/workflows/deploy.yml`
+- Trigger: push to `main`
+- Publish: `dist` to `gh-pages`
 
-## 프로젝트 구조
+## Project Structure
 ```text
 src/
-  App.jsx           # UI/상태 관리, 탭 렌더링, API 키 설정
-  lib/gemini.js     # 모델 호출, JSON 강제 출력, 파싱/재시도
-  index.css         # 테마 및 컴포넌트 스타일
+  App.jsx           # UI, state, tabs, glossary navigation
+  lib/gemini.js     # model calls, JSON schema enforcement, parse/retry
+  index.css         # theme and styling
 ```
 
-## 주의사항
-- 현재는 클라이언트 직접 호출 구조이므로 테스트/교육용에 적합합니다.
-- 상용 보안 요구가 높다면 서버 프록시 구조(서버 측 비밀키 관리)로 전환하세요.
+## Notes
+- Current architecture is client-direct model invocation, suitable for MVP and education use.
+- For stronger production security, migrate to a server-side proxy architecture.
+- If local access drops intermittently, the usual causes are dev server process termination or endpoint protection blocking local port binding.
