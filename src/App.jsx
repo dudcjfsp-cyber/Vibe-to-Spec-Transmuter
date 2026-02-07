@@ -44,6 +44,20 @@ function buildGlossaryMarkdown(glossary) {
     .join('\n\n');
 }
 
+function getDecisionBadge(decision) {
+  const normalized = String(decision || '').toLowerCase();
+
+  if (normalized.includes('adopt') || normalized.includes('추천')) {
+    return { label: '추천', className: 'text-green-400 border-green-500/40 bg-green-500/10' };
+  }
+
+  if (normalized.includes('reject') || normalized.includes('배제')) {
+    return { label: '배제', className: 'text-red-400 border-red-500/40 bg-red-500/10' };
+  }
+
+  return { label: '보류', className: 'text-orange-300 border-orange-500/40 bg-orange-500/10' };
+}
+
 const App = () => {
   const [vibe, setVibe] = useState('');
   const [result, setResult] = useState(null);
@@ -134,6 +148,7 @@ const App = () => {
 
   const thinkingMd = useMemo(() => buildThinkingMarkdown(result?.layers?.L1_thinking), [result]);
   const glossaryMd = useMemo(() => buildGlossaryMarkdown(result?.glossary), [result]);
+  const thinking = result?.layers?.L1_thinking;
 
   const currentTabMarkdown = useMemo(() => {
     if (!result) return '';
@@ -364,7 +379,96 @@ const App = () => {
               </div>
 
               <div className="p-6 md:p-8 prose prose-invert prose-cyber max-w-none prose-p:text-gray-400 prose-headings:text-cyber-cyan prose-headings:tracking-tighter prose-code:text-cyber-cyan-bright prose-pre:bg-cyber-black/50 prose-pre:border prose-pre:border-cyber-cyan-dim">
-                <ReactMarkdown>{currentTabMarkdown}</ReactMarkdown>
+                {activeTab !== 'thinking' && <ReactMarkdown>{currentTabMarkdown}</ReactMarkdown>}
+
+                {activeTab === 'thinking' && (
+                  <>
+                    {!showThinking && <ReactMarkdown>{currentTabMarkdown}</ReactMarkdown>}
+
+                    {showThinking && thinking && (
+                      <div className="not-prose space-y-6">
+                        <section className="space-y-2">
+                          <h3 className="text-cyber-cyan font-bold text-lg">문제 재진술</h3>
+                          <p className="text-gray-300 leading-relaxed">{thinking.interpretation || '-'}</p>
+                        </section>
+
+                        <section className="space-y-2">
+                          <h3 className="text-cyber-cyan font-bold text-lg">가정</h3>
+                          <ul className="list-disc pl-5 text-gray-300 space-y-1">
+                            {(thinking.assumptions || []).length === 0 && <li>-</li>}
+                            {(thinking.assumptions || []).map((item, idx) => (
+                              <li key={`assumption-${idx}`}>{item}</li>
+                            ))}
+                          </ul>
+                        </section>
+
+                        <section className="space-y-2">
+                          <h3 className="text-cyber-cyan font-bold text-lg">불확실 / 질문</h3>
+                          <ul className="list-disc pl-5 text-gray-300 space-y-1">
+                            {(thinking.uncertainties || []).length === 0 && <li>-</li>}
+                            {(thinking.uncertainties || []).map((item, idx) => (
+                              <li key={`uncertainty-${idx}`}>{item}</li>
+                            ))}
+                          </ul>
+                        </section>
+
+                        <section className="space-y-4">
+                          <h3 className="text-cyber-cyan font-bold text-lg">대안 비교</h3>
+                          {(thinking.alternatives || []).length === 0 && (
+                            <p className="text-gray-300">-</p>
+                          )}
+
+                          {(thinking.alternatives || []).map((alt, idx) => {
+                            const decision = getDecisionBadge(alt.decision);
+                            return (
+                              <article
+                                key={`alternative-${idx}`}
+                                className="border border-cyber-cyan-dim rounded-md p-4 bg-cyber-black/40 space-y-4"
+                              >
+                                <div className="flex items-center justify-between gap-3 flex-wrap">
+                                  <h4 className="text-cyber-cyan-bright font-bold text-base">
+                                    대안 {idx + 1} ({alt.name || 'N/A'})
+                                  </h4>
+                                  <span className={`text-xs md:text-sm px-2.5 py-1 rounded border ${decision.className}`}>
+                                    판단: {decision.label}
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <div className="border border-green-500/30 rounded p-3 bg-green-500/5">
+                                    <p className="text-green-300 font-bold mb-2">장점</p>
+                                    <ul className="list-disc pl-5 text-gray-200 space-y-1">
+                                      {(alt.pros || []).length === 0 && <li>-</li>}
+                                      {(alt.pros || []).map((item, pIdx) => (
+                                        <li key={`pros-${idx}-${pIdx}`}>{item}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+
+                                  <div className="border border-red-500/30 rounded p-3 bg-red-500/5">
+                                    <p className="text-red-300 font-bold mb-2">단점</p>
+                                    <ul className="list-disc pl-5 text-gray-200 space-y-1">
+                                      {(alt.cons || []).length === 0 && <li>-</li>}
+                                      {(alt.cons || []).map((item, cIdx) => (
+                                        <li key={`cons-${idx}-${cIdx}`}>{item}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                </div>
+
+                                {alt.reason && (
+                                  <p className="text-sm text-gray-300">
+                                    이유: {alt.reason}
+                                  </p>
+                                )}
+                              </article>
+                            );
+                          })}
+                        </section>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </Motion.div>
           )}
