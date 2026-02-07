@@ -32,7 +32,14 @@ const JSON_SCHEMA_HINT = `{
       "term": "string",
       "simple": "string",
       "analogy": "string",
-      "why": "string"
+      "why": "string",
+      "decision_point": "string",
+      "beginner_note": "string",
+      "practical_note": "string",
+      "common_mistakes": ["string"],
+      "request_template": "string",
+      "aliases": ["string"],
+      "flow_stage": "Webhook|Parsing|Data Sync|Source of Truth"
     }
   ]
 }`;
@@ -53,6 +60,12 @@ OUTPUT RULES (MUST FOLLOW):
    - L3 실행: 구현 옵션 + 마스터 프롬프트(Cursor/Claude/Codex)
 5) The master prompt must be copy-paste ready and implementation-focused.
 6) Avoid hardcoded design values when discussing UI; prefer variables/tokens.
+7) Every glossary item must include:
+   - decision_point: what the user must decide next
+   - request_template: one concrete change-request sentence
+   - aliases: 1+ searchable surface forms used in body text
+   - flow_stage: one of [Webhook, Parsing, Data Sync, Source of Truth]
+8) For each glossary item, at least one of term/aliases must appear verbatim in nondev_spec_md or dev_spec_md.
 `;
 
 let availableModels = [];
@@ -73,6 +86,25 @@ function normalizeResult(raw, fallbackModel) {
   const layers = safe.layers && typeof safe.layers === 'object' ? safe.layers : {};
   const thinking = layers.L1_thinking && typeof layers.L1_thinking === 'object' ? layers.L1_thinking : {};
 
+  const glossary = Array.isArray(safe.glossary)
+    ? safe.glossary.map((item) => {
+      const safeItem = item && typeof item === 'object' ? item : {};
+      return {
+        term: typeof safeItem.term === 'string' ? safeItem.term : '',
+        simple: typeof safeItem.simple === 'string' ? safeItem.simple : '',
+        analogy: typeof safeItem.analogy === 'string' ? safeItem.analogy : '',
+        why: typeof safeItem.why === 'string' ? safeItem.why : '',
+        decision_point: typeof safeItem.decision_point === 'string' ? safeItem.decision_point : '',
+        beginner_note: typeof safeItem.beginner_note === 'string' ? safeItem.beginner_note : '',
+        practical_note: typeof safeItem.practical_note === 'string' ? safeItem.practical_note : '',
+        common_mistakes: Array.isArray(safeItem.common_mistakes) ? safeItem.common_mistakes : [],
+        request_template: typeof safeItem.request_template === 'string' ? safeItem.request_template : '',
+        aliases: Array.isArray(safeItem.aliases) ? safeItem.aliases : [],
+        flow_stage: typeof safeItem.flow_stage === 'string' ? safeItem.flow_stage : '',
+      };
+    })
+    : [];
+
   return {
     model: typeof safe.model === 'string' && safe.model.trim() ? safe.model : fallbackModel,
     artifacts: {
@@ -88,7 +120,7 @@ function normalizeResult(raw, fallbackModel) {
         alternatives: Array.isArray(thinking.alternatives) ? thinking.alternatives : [],
       },
     },
-    glossary: Array.isArray(safe.glossary) ? safe.glossary : [],
+    glossary,
   };
 }
 
