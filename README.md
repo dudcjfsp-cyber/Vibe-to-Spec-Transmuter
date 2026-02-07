@@ -1,5 +1,7 @@
 # Vibe-to-Spec Transmuter
 
+[English](README.md) | [Korean](README.ko.md)
+
 Vibe-to-Spec Transmuter is an educational MVP that converts abstract user intent ("vibe") into implementation-ready technical specs.
 
 ## Goals
