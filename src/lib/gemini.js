@@ -1,69 +1,130 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+﻿import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const SYSTEM_PROMPT = `
-You are the "Vibe-to-Spec Transmuter", an advanced architectural AI.
-Your mission is to decrypt abstract user intents ("vibe") and recompile them into rigorous, executable Technical Specifications for developers or AI coding agents.
+const DEFAULT_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"];
 
-### CRITICAL PROTOCOLS (MUST FOLLOW):
-1. **Variable-First Architecture:** Never allow hardcoded values (magic numbers/hex codes). Mandate the use of CSS Variables (Design Tokens) and Constants.
-2. **State-Driven Logic:** Do not just describe the UI. Define explicit states: [Idle, Loading, Active, Error, Success].
-3. **Master Prompt Generation:** The final section MUST be a "Copy-Paste Ready" prompt block optimized for AI Coders (Cursor/Claude).
+const JSON_SCHEMA_HINT = `{
+  "model": "string",
+  "artifacts": {
+    "dev_spec_md": "string",
+    "nondev_spec_md": "string",
+    "master_prompt": "string"
+  },
+  "layers": {
+    "L1_thinking": {
+      "interpretation": "string",
+      "assumptions": ["string"],
+      "uncertainties": ["string"],
+      "alternatives": [
+        {
+          "name": "A|B",
+          "pros": ["string"],
+          "cons": ["string"],
+          "decision": "adopt|reject",
+          "reason": "string"
+        }
+      ]
+    }
+  },
+  "glossary": [
+    {
+      "term": "string",
+      "simple": "string",
+      "analogy": "string",
+      "why": "string"
+    }
+  ]
+}`;
 
-### OUTPUT FORMAT (Markdown, Korean):
+const BASE_SYSTEM_PROMPT = `
+You are the "Vibe-to-Spec Transmuter" for an educational MVP.
+Goal: Help non-developers learn engineering thinking and express change requests clearly.
 
-## 1. 🏗 System Architecture (구조 설계)
-- **Component Tree:** DOM structure with semantic tags.
-- **Tech Stack:** Optimal minimal stack (e.g., React + Tailwind + Framer Motion).
-
-## 2. 🎨 Design Tokens (디자인 토큰)
-- **Color Palette:** Define CSS variables (e.g., --primary-glow, --bg-depth).
-- **Typography & Spacing:** Define logic, not just values.
-
-## 3. 🧠 Logic & State Machine (로직 및 상태)
-- **Lifecycle:** Mount -> Trigger -> Interaction -> Unmount.
-- **State Definitions:** What happens in 'Loading'? What happens in 'Error'?
-
-## 4. ⚠️ Constraints (제약 사항)
-- Accessibility (A11y), Performance optimizations, Error handling.
-- "Do NOT use !important."
-
-## 5. 💻 The Master Prompt (For AI Coder)
-(Write a high-density prompt in a code block. This part can be a mix of English/Korean for maximum precision. The user will copy this to Cursor/Claude.)
-
----
-**Tone:** Cold, Cybernetic, Professional, Precise.
-**Language:** Korean (except for technical terms/variable names).
+OUTPUT RULES (MUST FOLLOW):
+1) Return JSON ONLY. No markdown wrapper. No prose outside JSON.
+2) Follow the exact schema shape provided.
+3) Korean language by default, keep technical identifiers in English where useful.
+4) The output must include 3 layers:
+   - L1 사고(학습 핵심): 문제 재진술, 가정, 불확실/질문, 대안 2개 비교(채택/배제 이유)
+   - L2 번역(전달 핵심):
+     - nondev_spec_md: 비전공자용 5줄 요약 + 설정 포인트 + 수정 요청 예시 5개
+     - dev_spec_md: 개발자용 요구사항/데이터/엣지케이스/테스트케이스
+   - L3 실행: 구현 옵션 + 마스터 프롬프트(Cursor/Claude/Codex)
+5) The master prompt must be copy-paste ready and implementation-focused.
+6) Avoid hardcoded design values when discussing UI; prefer variables/tokens.
 `;
 
 let availableModels = [];
+
+function normalizeResult(raw, fallbackModel) {
+  const safe = raw && typeof raw === "object" ? raw : {};
+  const artifacts = safe.artifacts && typeof safe.artifacts === "object" ? safe.artifacts : {};
+  const layers = safe.layers && typeof safe.layers === "object" ? safe.layers : {};
+  const thinking = layers.L1_thinking && typeof layers.L1_thinking === "object" ? layers.L1_thinking : {};
+
+  return {
+    model: typeof safe.model === "string" && safe.model.trim() ? safe.model : fallbackModel,
+    artifacts: {
+      dev_spec_md: typeof artifacts.dev_spec_md === "string" ? artifacts.dev_spec_md : "",
+      nondev_spec_md: typeof artifacts.nondev_spec_md === "string" ? artifacts.nondev_spec_md : "",
+      master_prompt: typeof artifacts.master_prompt === "string" ? artifacts.master_prompt : ""
+    },
+    layers: {
+      L1_thinking: {
+        interpretation: typeof thinking.interpretation === "string" ? thinking.interpretation : "",
+        assumptions: Array.isArray(thinking.assumptions) ? thinking.assumptions : [],
+        uncertainties: Array.isArray(thinking.uncertainties) ? thinking.uncertainties : [],
+        alternatives: Array.isArray(thinking.alternatives) ? thinking.alternatives : []
+      }
+    },
+    glossary: Array.isArray(safe.glossary) ? safe.glossary : []
+  };
+}
+
+function extractJsonText(text) {
+  if (!text || typeof text !== "string") return "";
+  const cleaned = text.trim();
+  if (cleaned.startsWith("```")) {
+    const withoutFenceStart = cleaned.replace(/^```[a-zA-Z]*\s*/, "");
+    return withoutFenceStart.replace(/```\s*$/, "").trim();
+  }
+  return cleaned;
+}
+
+async function generateJson(model, vibe, showThinking, retryPayload = null) {
+  const prompt = retryPayload
+    ? `Your previous response was invalid JSON. Fix it now. Return JSON only and strictly follow schema.\nSchema:\n${JSON_SCHEMA_HINT}\nPrevious output:\n${retryPayload}`
+    : `SYSTEM:\n${BASE_SYSTEM_PROMPT}\n\nJSON Schema Shape:\n${JSON_SCHEMA_HINT}\n\nUser vibe:\n${vibe}\n\nRuntime option: showThinking=${showThinking ? "ON" : "OFF"}.\nIf OFF, keep layers.L1_thinking concise but present.`;
+
+  const result = await model.generateContent(prompt);
+  const response = await result.response;
+  return response.text();
+}
 
 /**
  * Extracts the list of available models from the API.
  */
 export async function fetchAvailableModels(apiKey) {
-  if (!apiKey) return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"];
+  if (!apiKey) return DEFAULT_MODELS;
 
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models`, {
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
       headers: {
-        'x-goog-api-key': apiKey
+        "x-goog-api-key": apiKey
       }
     });
     const data = await response.json();
 
     if (data.models) {
       availableModels = data.models
-        .filter(m => m.supportedGenerationMethods.includes("generateContent"))
-        .map(m => m.name.split('/').pop());
+        .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+        .map((m) => m.name.split("/").pop());
 
-      console.log("Neural models synchronized:", availableModels);
       return availableModels;
     }
-  } catch (error) {
-    // Sanitize error to prevent leaking key in logs
-    console.warn("Neural sync failed, using default sequence.");
+  } catch {
+    // Avoid exposing API key details.
   }
-  return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"];
+  return DEFAULT_MODELS;
 }
 
 async function getOptimalModel(apiKey) {
@@ -77,34 +138,31 @@ async function getOptimalModel(apiKey) {
     if (availableModels.includes(pref)) return pref;
   }
 
-  return availableModels[0] || "gemini-1.5-flash";
+  return availableModels[0] || DEFAULT_MODELS[0];
 }
 
-export async function transmuteVibeToSpec(vibe, apiKey) {
-  if (!apiKey) throw new Error("API 키가 설정되지 않았습니다. 설정에서 입력해 주세요.");
+export async function transmuteVibeToSpec(vibe, apiKey, { showThinking = true } = {}) {
+  if (!apiKey) {
+    throw new Error("API key is missing.");
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const modelName = await getOptimalModel(apiKey);
+  const model = genAI.getGenerativeModel({ model: modelName });
 
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const modelName = await getOptimalModel(apiKey);
-    console.log(`Utilizing neural link: ${modelName}`);
-
-    const model = genAI.getGenerativeModel({ model: modelName });
-
-    const prompt = `
-    SYSTEM: ${SYSTEM_PROMPT}
-    USER VIBE: ${vibe}
-    
-    TRANSMUTE NOW.
-    `;
-
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    return {
-      content: response.text(),
-      model: modelName
-    };
+    const firstText = await generateJson(model, vibe, showThinking);
+    try {
+      const parsed = JSON.parse(extractJsonText(firstText));
+      return normalizeResult(parsed, modelName);
+    } catch {
+      const repairedText = await generateJson(model, vibe, showThinking, firstText);
+      const repaired = JSON.parse(extractJsonText(repairedText));
+      return normalizeResult(repaired, modelName);
+    }
   } catch (error) {
     console.error("Transmutation failed:", error);
-    throw new Error("Transmutation interrupted by neural link failure. Verify API key integrity.");
+    throw new Error("Transmutation interrupted by model or JSON parsing failure.");
   }
 }
+
