@@ -1,14 +1,11 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion as Motion, AnimatePresence } from 'framer-motion';
 import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert, Settings, X, Key, Brain, BookOpen, Code, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { transmuteVibeToSpec, fetchAvailableModels } from './lib/gemini';
 
 const API_KEY_STORAGE_KEY = 'gemini_api_key';
-
-function getStoredApiKey() {
-  return sessionStorage.getItem(API_KEY_STORAGE_KEY) || localStorage.getItem(API_KEY_STORAGE_KEY) || '';
-}
+const CLIPBOARD_RESET_MS = 2000;
 
 const TABS = [
   { id: 'nondev', label: '비전공자', icon: User },
@@ -16,6 +13,36 @@ const TABS = [
   { id: 'thinking', label: '사고', icon: Brain },
   { id: 'glossary', label: '용어', icon: BookOpen },
 ];
+
+function getStoredApiKey() {
+  return sessionStorage.getItem(API_KEY_STORAGE_KEY) || localStorage.getItem(API_KEY_STORAGE_KEY) || '';
+}
+
+function buildThinkingMarkdown(thinking) {
+  if (!thinking) return '';
+
+  const assumptions = (thinking.assumptions || []).map((item) => `- ${item}`).join('\n');
+  const uncertainties = (thinking.uncertainties || []).map((item) => `- ${item}`).join('\n');
+  const alternatives = (thinking.alternatives || [])
+    .map((alt, idx) => {
+      const pros = (alt.pros || []).map((item) => `  - 장점: ${item}`).join('\n');
+      const cons = (alt.cons || []).map((item) => `  - 단점: ${item}`).join('\n');
+      const decision = alt.decision ? `  - 판단: ${alt.decision}` : '';
+      const reason = alt.reason ? `  - 이유: ${alt.reason}` : '';
+      return `### 대안 ${idx + 1} (${alt.name || 'N/A'})\n${pros}\n${cons}\n${decision}\n${reason}`;
+    })
+    .join('\n\n');
+
+  return `## 문제 재진술\n${thinking.interpretation || ''}\n\n## 가정\n${assumptions || '- 없음'}\n\n## 불확실 / 질문\n${uncertainties || '- 없음'}\n\n## 대안 비교\n${alternatives || '- 없음'}`;
+}
+
+function buildGlossaryMarkdown(glossary) {
+  if (!glossary?.length) return '';
+
+  return glossary
+    .map((item, idx) => `### ${idx + 1}. ${item.term || '용어'}\n- 쉬운 설명: ${item.simple || ''}\n- 비유: ${item.analogy || ''}\n- 왜 중요한가: ${item.why || ''}`)
+    .join('\n\n');
+}
 
 const App = () => {
   const [vibe, setVibe] = useState('');
@@ -34,10 +61,10 @@ const App = () => {
   const textareaRef = useRef(null);
 
   useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-    }
+    if (!textareaRef.current) return;
+
+    textareaRef.current.style.height = 'auto';
+    textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
   }, [vibe]);
 
   useEffect(() => {
@@ -67,18 +94,19 @@ const App = () => {
   }, [apiKey]);
 
   const handleSaveKey = () => {
-    if (tempKey.trim()) {
-      const key = tempKey.trim();
-      sessionStorage.setItem(API_KEY_STORAGE_KEY, key);
-      if (rememberThisDevice) {
-        localStorage.setItem(API_KEY_STORAGE_KEY, key);
-      } else {
-        localStorage.removeItem(API_KEY_STORAGE_KEY);
-      }
-      setApiKey(key);
-      setIsSettingsOpen(false);
-      setTempKey('');
+    const key = tempKey.trim();
+    if (!key) return;
+
+    sessionStorage.setItem(API_KEY_STORAGE_KEY, key);
+    if (rememberThisDevice) {
+      localStorage.setItem(API_KEY_STORAGE_KEY, key);
+    } else {
+      localStorage.removeItem(API_KEY_STORAGE_KEY);
     }
+
+    setApiKey(key);
+    setIsSettingsOpen(false);
+    setTempKey('');
   };
 
   const handleTransmute = async () => {
@@ -104,32 +132,8 @@ const App = () => {
     }
   };
 
-  const thinkingMd = useMemo(() => {
-    if (!result?.layers?.L1_thinking) return '';
-    const t = result.layers.L1_thinking;
-    const assumptions = (t.assumptions || []).map((a) => `- ${a}`).join('\n');
-    const uncertainties = (t.uncertainties || []).map((q) => `- ${q}`).join('\n');
-    const alternatives = (t.alternatives || [])
-      .map((alt, idx) => {
-        const pros = (alt.pros || []).map((p) => `  - 장점: ${p}`).join('\n');
-        const cons = (alt.cons || []).map((c) => `  - 단점: ${c}`).join('\n');
-        const decision = alt.decision ? `  - 판단: ${alt.decision}` : '';
-        const reason = alt.reason ? `  - 이유: ${alt.reason}` : '';
-        return `### 대안 ${idx + 1} (${alt.name || 'N/A'})\n${pros}\n${cons}\n${decision}\n${reason}`;
-      })
-      .join('\n\n');
-
-    return `## 문제 재진술\n${t.interpretation || ''}\n\n## 가정\n${assumptions || '- 없음'}\n\n## 불확실 / 질문\n${uncertainties || '- 없음'}\n\n## 대안 비교\n${alternatives || '- 없음'}`;
-  }, [result]);
-
-  const glossaryMd = useMemo(() => {
-    if (!result?.glossary?.length) return '';
-    return result.glossary
-      .map((g, idx) => {
-        return `### ${idx + 1}. ${g.term || '용어'}\n- 쉬운 설명: ${g.simple || ''}\n- 비유: ${g.analogy || ''}\n- 왜 중요한가: ${g.why || ''}`;
-      })
-      .join('\n\n');
-  }, [result]);
+  const thinkingMd = useMemo(() => buildThinkingMarkdown(result?.layers?.L1_thinking), [result]);
+  const glossaryMd = useMemo(() => buildGlossaryMarkdown(result?.glossary), [result]);
 
   const currentTabMarkdown = useMemo(() => {
     if (!result) return '';
@@ -141,20 +145,20 @@ const App = () => {
     return '';
   }, [activeTab, glossaryMd, result, showThinking, thinkingMd]);
 
-  const handleCopyDevSpec = () => {
-    const text = result?.artifacts?.dev_spec_md;
+  const copyToClipboardWithFeedback = (text, setFlag) => {
     if (!text) return;
+
     navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setFlag(true);
+    setTimeout(() => setFlag(false), CLIPBOARD_RESET_MS);
+  };
+
+  const handleCopyDevSpec = () => {
+    copyToClipboardWithFeedback(result?.artifacts?.dev_spec_md, setCopied);
   };
 
   const handleCopyMasterPrompt = () => {
-    const text = result?.artifacts?.master_prompt;
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedMaster(true);
-    setTimeout(() => setCopiedMaster(false), 2000);
+    copyToClipboardWithFeedback(result?.artifacts?.master_prompt, setCopiedMaster);
   };
 
   return (
@@ -457,6 +461,3 @@ const App = () => {
 };
 
 export default App;
-
-
-

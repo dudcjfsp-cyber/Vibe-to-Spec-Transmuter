@@ -1,6 +1,8 @@
-﻿import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const DEFAULT_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"];
+const MODELS_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
+const DEFAULT_MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'];
+const PREFERENCE_ORDER = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro'];
 
 const JSON_SCHEMA_HINT = `{
   "model": "string",
@@ -55,49 +57,65 @@ OUTPUT RULES (MUST FOLLOW):
 
 let availableModels = [];
 
+function extractJsonText(text) {
+  if (!text || typeof text !== 'string') return '';
+
+  const cleaned = text.trim();
+  if (!cleaned.startsWith('```')) return cleaned;
+
+  const withoutFenceStart = cleaned.replace(/^```[a-zA-Z]*\s*/, '');
+  return withoutFenceStart.replace(/```\s*$/, '').trim();
+}
+
 function normalizeResult(raw, fallbackModel) {
-  const safe = raw && typeof raw === "object" ? raw : {};
-  const artifacts = safe.artifacts && typeof safe.artifacts === "object" ? safe.artifacts : {};
-  const layers = safe.layers && typeof safe.layers === "object" ? safe.layers : {};
-  const thinking = layers.L1_thinking && typeof layers.L1_thinking === "object" ? layers.L1_thinking : {};
+  const safe = raw && typeof raw === 'object' ? raw : {};
+  const artifacts = safe.artifacts && typeof safe.artifacts === 'object' ? safe.artifacts : {};
+  const layers = safe.layers && typeof safe.layers === 'object' ? safe.layers : {};
+  const thinking = layers.L1_thinking && typeof layers.L1_thinking === 'object' ? layers.L1_thinking : {};
 
   return {
-    model: typeof safe.model === "string" && safe.model.trim() ? safe.model : fallbackModel,
+    model: typeof safe.model === 'string' && safe.model.trim() ? safe.model : fallbackModel,
     artifacts: {
-      dev_spec_md: typeof artifacts.dev_spec_md === "string" ? artifacts.dev_spec_md : "",
-      nondev_spec_md: typeof artifacts.nondev_spec_md === "string" ? artifacts.nondev_spec_md : "",
-      master_prompt: typeof artifacts.master_prompt === "string" ? artifacts.master_prompt : ""
+      dev_spec_md: typeof artifacts.dev_spec_md === 'string' ? artifacts.dev_spec_md : '',
+      nondev_spec_md: typeof artifacts.nondev_spec_md === 'string' ? artifacts.nondev_spec_md : '',
+      master_prompt: typeof artifacts.master_prompt === 'string' ? artifacts.master_prompt : '',
     },
     layers: {
       L1_thinking: {
-        interpretation: typeof thinking.interpretation === "string" ? thinking.interpretation : "",
+        interpretation: typeof thinking.interpretation === 'string' ? thinking.interpretation : '',
         assumptions: Array.isArray(thinking.assumptions) ? thinking.assumptions : [],
         uncertainties: Array.isArray(thinking.uncertainties) ? thinking.uncertainties : [],
-        alternatives: Array.isArray(thinking.alternatives) ? thinking.alternatives : []
-      }
+        alternatives: Array.isArray(thinking.alternatives) ? thinking.alternatives : [],
+      },
     },
-    glossary: Array.isArray(safe.glossary) ? safe.glossary : []
+    glossary: Array.isArray(safe.glossary) ? safe.glossary : [],
   };
 }
 
-function extractJsonText(text) {
-  if (!text || typeof text !== "string") return "";
-  const cleaned = text.trim();
-  if (cleaned.startsWith("```")) {
-    const withoutFenceStart = cleaned.replace(/^```[a-zA-Z]*\s*/, "");
-    return withoutFenceStart.replace(/```\s*$/, "").trim();
+function buildPrompt(vibe, showThinking, retryPayload = null) {
+  if (retryPayload) {
+    return `Your previous response was invalid JSON. Fix it now. Return JSON only and strictly follow schema.\nSchema:\n${JSON_SCHEMA_HINT}\nPrevious output:\n${retryPayload}`;
   }
-  return cleaned;
+
+  return `SYSTEM:\n${BASE_SYSTEM_PROMPT}\n\nJSON Schema Shape:\n${JSON_SCHEMA_HINT}\n\nUser vibe:\n${vibe}\n\nRuntime option: showThinking=${showThinking ? 'ON' : 'OFF'}.\nIf OFF, keep layers.L1_thinking concise but present.`;
 }
 
 async function generateJson(model, vibe, showThinking, retryPayload = null) {
-  const prompt = retryPayload
-    ? `Your previous response was invalid JSON. Fix it now. Return JSON only and strictly follow schema.\nSchema:\n${JSON_SCHEMA_HINT}\nPrevious output:\n${retryPayload}`
-    : `SYSTEM:\n${BASE_SYSTEM_PROMPT}\n\nJSON Schema Shape:\n${JSON_SCHEMA_HINT}\n\nUser vibe:\n${vibe}\n\nRuntime option: showThinking=${showThinking ? "ON" : "OFF"}.\nIf OFF, keep layers.L1_thinking concise but present.`;
-
+  const prompt = buildPrompt(vibe, showThinking, retryPayload);
   const result = await model.generateContent(prompt);
   const response = await result.response;
   return response.text();
+}
+
+async function parseJsonWithOneRetry(model, vibe, showThinking) {
+  const firstText = await generateJson(model, vibe, showThinking);
+
+  try {
+    return JSON.parse(extractJsonText(firstText));
+  } catch {
+    const repairedText = await generateJson(model, vibe, showThinking, firstText);
+    return JSON.parse(extractJsonText(repairedText));
+  }
 }
 
 /**
@@ -107,23 +125,24 @@ export async function fetchAvailableModels(apiKey) {
   if (!apiKey) return DEFAULT_MODELS;
 
   try {
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+    const response = await fetch(MODELS_ENDPOINT, {
       headers: {
-        "x-goog-api-key": apiKey
-      }
+        'x-goog-api-key': apiKey,
+      },
     });
     const data = await response.json();
 
     if (data.models) {
       availableModels = data.models
-        .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
-        .map((m) => m.name.split("/").pop());
+        .filter((modelItem) => modelItem.supportedGenerationMethods?.includes('generateContent'))
+        .map((modelItem) => modelItem.name.split('/').pop());
 
       return availableModels;
     }
   } catch {
     // Avoid exposing API key details.
   }
+
   return DEFAULT_MODELS;
 }
 
@@ -132,10 +151,8 @@ async function getOptimalModel(apiKey) {
     availableModels = await fetchAvailableModels(apiKey);
   }
 
-  const preferenceOrder = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro", "gemini-pro"];
-
-  for (const pref of preferenceOrder) {
-    if (availableModels.includes(pref)) return pref;
+  for (const preferred of PREFERENCE_ORDER) {
+    if (availableModels.includes(preferred)) return preferred;
   }
 
   return availableModels[0] || DEFAULT_MODELS[0];
@@ -143,7 +160,7 @@ async function getOptimalModel(apiKey) {
 
 export async function transmuteVibeToSpec(vibe, apiKey, { showThinking = true } = {}) {
   if (!apiKey) {
-    throw new Error("API key is missing.");
+    throw new Error('API key is missing.');
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -151,18 +168,10 @@ export async function transmuteVibeToSpec(vibe, apiKey, { showThinking = true } 
   const model = genAI.getGenerativeModel({ model: modelName });
 
   try {
-    const firstText = await generateJson(model, vibe, showThinking);
-    try {
-      const parsed = JSON.parse(extractJsonText(firstText));
-      return normalizeResult(parsed, modelName);
-    } catch {
-      const repairedText = await generateJson(model, vibe, showThinking, firstText);
-      const repaired = JSON.parse(extractJsonText(repairedText));
-      return normalizeResult(repaired, modelName);
-    }
+    const parsed = await parseJsonWithOneRetry(model, vibe, showThinking);
+    return normalizeResult(parsed, modelName);
   } catch (error) {
-    console.error("Transmutation failed:", error);
-    throw new Error("Transmutation interrupted by model or JSON parsing failure.");
+    console.error('Transmutation failed:', error);
+    throw new Error('Transmutation interrupted by model or JSON parsing failure.');
   }
 }
-
