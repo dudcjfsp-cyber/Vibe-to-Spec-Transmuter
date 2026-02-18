@@ -1,3 +1,10 @@
+/* -------------------------------------------------------
+   참고: 이 파일은 Vite 기본 템플릿 스타일이 남아있는 영역입니다.
+   현재 메인 스타일은 index.css + Tailwind 유틸 클래스로 처리됩니다.
+   그래도 혹시 사용하는 컴포넌트가 있을 수 있어 유지합니다.
+   ------------------------------------------------------- */
+
+/* 앱 루트 컨테이너 기본 폭/정렬 */
 #root {
   max-width: 1280px;
   margin: 0 auto;
@@ -5,19 +12,25 @@
   text-align: center;
 }
 
+/* 로고 이미지 기본 크기/전환 효과 */
 .logo {
   height: 6em;
   padding: 1.5em;
   will-change: filter;
   transition: filter 300ms;
 }
+
+/* 마우스를 올렸을 때 로고 글로우 */
 .logo:hover {
   filter: drop-shadow(0 0 2em #646cffaa);
 }
+
+/* React 로고 전용 색상 글로우 */
 .logo.react:hover {
   filter: drop-shadow(0 0 2em #61dafbaa);
 }
 
+/* 로고 회전 애니메이션 정의 */
 @keyframes logo-spin {
   from {
     transform: rotate(0deg);
@@ -27,16 +40,19 @@
   }
 }
 
+/* 사용자가 "모션 최소화"를 원하지 않을 때만 회전 실행 */
 @media (prefers-reduced-motion: no-preference) {
   a:nth-of-type(2) .logo {
     animation: logo-spin infinite 20s linear;
   }
 }
 
+/* 카드 공통 패딩 */
 .card {
   padding: 2em;
 }
 
+/* 보조 텍스트 색상 */
 .read-the-docs {
   color: #888;
 }

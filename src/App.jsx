@@ -1,44 +1,62 @@
 ﻿
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion as Motion, AnimatePresence } from 'framer-motion';
-import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert, Settings, X, Key, Brain, BookOpen, Code, User } from 'lucide-react';
+import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert, Settings, X, Key, Brain, BookOpen, Code, User, Layers3 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { transmuteVibeToSpec, fetchAvailableModels } from './lib/gemini';
 
-// Browser storage key used for Gemini API key persistence.
+// -------------------------------------------------------
+// 전역 상수
+// -------------------------------------------------------
+// API 키를 브라우저 저장소에 넣을 때 사용할 키 이름입니다.
 const API_KEY_STORAGE_KEY = 'gemini_api_key';
-// UI feedback timeout for copy actions.
+// "복사 완료" 표시가 유지되는 시간(ms)입니다.
 const CLIPBOARD_RESET_MS = 2000;
-// Canonical concept flow used to sort glossary entries.
+// 용어 카드 정렬 순서(개념 흐름)입니다.
 const FLOW_STAGES = ['Webhook', 'Parsing', 'Data Sync', 'Source of Truth'];
-// Highlight duration after glossary-to-content jump.
+// 용어 클릭 후 본문 강조 효과가 유지되는 시간(ms)입니다.
 const FOCUS_HIGHLIGHT_MS = 2200;
 
-// Top-level output tabs shown in the result panel.
+// 결과 패널 상단 탭 목록입니다.
 const TABS = [
   { id: 'nondev', label: '비전공자', icon: User },
   { id: 'dev', label: '개발자', icon: Code },
   { id: 'thinking', label: '사고', icon: Brain },
+  { id: 'layers', label: '레이어', icon: Layers3 },
   { id: 'glossary', label: '용어', icon: BookOpen },
 ];
 
-// Reads API key from session first, then local storage fallback.
+/**
+ * 저장된 API 키를 읽습니다.
+ * 우선순위: sessionStorage -> localStorage
+ * 예시: 탭 새로고침 후에도 임시 키를 복구할 수 있습니다.
+ */
 function getStoredApiKey() {
   return sessionStorage.getItem(API_KEY_STORAGE_KEY) || localStorage.getItem(API_KEY_STORAGE_KEY) || '';
 }
 
-// Ensures glossary flow stage always maps to a known lane.
+/**
+ * 용어의 flow_stage를 허용된 단계로 보정합니다.
+ * 알 수 없는 값이면 기본 단계(Source of Truth)로 처리합니다.
+ */
 function normalizeFlowStage(stage) {
   return FLOW_STAGES.includes(stage) ? stage : 'Source of Truth';
 }
 
-// Generates stable DOM-friendly IDs for glossary term cards.
+/**
+ * 용어 카드용 고정 ID를 생성합니다.
+ * 예시: "JSON Parser", 2 -> "term-json-parser-2"
+ */
 function makeTermId(term, idx) {
   const normalized = String(term || '').toLowerCase().replace(/[^a-z0-9가-힣]+/g, '-').replace(/^-+|-+$/g, '');
   return normalized ? `term-${normalized}-${idx}` : `term-${idx}`;
 }
 
-// Fallback markdown builder for thinking tab when structured UI is off.
+/**
+ * 사고 탭 fallback 마크다운 생성기입니다.
+ * 구조화 UI를 쓰지 않을 때도 최소 정보가 출력되도록 보장합니다.
+ */
 function buildThinkingMarkdown(thinking) {
   if (!thinking) return '';
 
@@ -57,7 +75,9 @@ function buildThinkingMarkdown(thinking) {
   return `## 문제 재진술\n${thinking.interpretation || ''}\n\n## 가정\n${assumptions || '- 없음'}\n\n## 불확실 / 질문\n${uncertainties || '- 없음'}\n\n## 대안 비교\n${alternatives || '- 없음'}`;
 }
 
-// Fallback markdown builder for glossary tab when needed.
+/**
+ * 용어 탭 fallback 마크다운 생성기입니다.
+ */
 function buildGlossaryMarkdown(glossary) {
   if (!glossary?.length) return '';
   return glossary
@@ -65,7 +85,9 @@ function buildGlossaryMarkdown(glossary) {
     .join('\n\n');
 }
 
-// Maps decision semantics to color-coded badge styles.
+/**
+ * 대안 판단값(adopt/reject)을 UI 배지 스타일로 변환합니다.
+ */
 function getDecisionBadge(decision) {
   const normalized = String(decision || '').toLowerCase();
   if (normalized.includes('adopt') || normalized.includes('추천')) {
@@ -77,13 +99,43 @@ function getDecisionBadge(decision) {
   return { label: '보류', className: 'text-orange-300 border-orange-500/40 bg-orange-500/10' };
 }
 
-// Boundary check helper to avoid matching inside larger words.
+/**
+ * 하이라이트 시 단어 경계를 검사하는 보조 함수입니다.
+ * 예시: "json"이 "myjsonvalue" 내부에서 잘못 매칭되지 않게 돕습니다.
+ */
 function isWordLike(char) {
   return /[A-Za-z0-9_가-힣]/.test(char || '');
 }
 
+/**
+ * 문자열 배열 정규화 함수입니다.
+ * null/숫자/빈 문자열을 걸러서 "보여줄 텍스트 목록"으로 만듭니다.
+ */
+function toStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
+/**
+ * 결과 객체에서 표준 출력 payload를 안전하게 꺼냅니다.
+ * 호환성 때문에 key가 standard_output 또는 표준_출력 둘 다 가능합니다.
+ */
+function getStandardOutput(result) {
+  if (!result || typeof result !== 'object') return null;
+  if (result.standard_output && typeof result.standard_output === 'object') return result.standard_output;
+  if (result['표준_출력'] && typeof result['표준_출력'] === 'object') return result['표준_출력'];
+  return null;
+}
+
+/**
+ * 메인 화면 컴포넌트입니다.
+ * 초보자 관점에서 보면, "입력 -> 변환 -> 탭별 결과 확인" 흐름 전체를 담당합니다.
+ */
 function App() {
-  // Core user input and generation result states. {
+  // -------------------------------------------------------
+  // 상태(state): 입력/결과/탭/강조/설정
+  // -------------------------------------------------------
+  // 입력값(vibe), 생성 결과(result), 처리 상태(status)
   const [vibe, setVibe] = useState('');
   const [result, setResult] = useState(null);
   const [status, setStatus] = useState('idle');
@@ -100,18 +152,21 @@ function App() {
   const [pendingGlossaryFocusTermId, setPendingGlossaryFocusTermId] = useState(null);
   const [pendingContentScrollTermId, setPendingContentScrollTermId] = useState(null);
 
-    // API key and settings modal controls.
+  // API 키 설정 모달 관련 상태
   const [apiKey, setApiKey] = useState(getStoredApiKey);
   const [isSettingsOpen, setIsSettingsOpen] = useState(!getStoredApiKey());
   const [rememberThisDevice, setRememberThisDevice] = useState(Boolean(localStorage.getItem(API_KEY_STORAGE_KEY)));
   const [tempKey, setTempKey] = useState('');
 
-    // Refs for textarea sizing, content scrolling, and glossary focus.
+  // DOM 참조(ref): 자동 높이 조절, 스크롤 이동, 용어 카드 포커스
   const textareaRef = useRef(null);
   const contentContainerRef = useRef(null);
   const glossaryCardRefs = useRef({});
 
-    // Normalized glossary list with aliases and flow stage ordering.
+  // -------------------------------------------------------
+  // 파생 데이터(useMemo)
+  // -------------------------------------------------------
+  // 용어 목록 정규화(별칭 확장 + 검색 토큰 + 단계 정렬)
   const glossaryItems = useMemo(() => {
     const raw = result?.glossary || [];
 
@@ -129,7 +184,7 @@ function App() {
       .sort((a, b) => FLOW_STAGES.indexOf(a.flow_stage) - FLOW_STAGES.indexOf(b.flow_stage));
   }, [result]);
 
-    // Search matchers used for in-content term highlighting.
+  // 본문 하이라이트용 매처: 긴 단어를 먼저 검색해 오탐을 줄입니다.
   const matchers = useMemo(() => {
     const list = [];
     glossaryItems.forEach((item) => {
@@ -138,31 +193,145 @@ function App() {
     return list.sort((a, b) => b.term.length - a.term.length);
   }, [glossaryItems]);
 
+  // 모델 결과에서 표준 출력(payload)만 분리합니다.
+  const standardOutput = useMemo(() => getStandardOutput(result), [result]);
+
+  // 레이어 탭 카드 데이터 조립:
+  // L1~L5를 사람이 읽기 쉬운 문장 배열로 만들어 카드 UI에 전달합니다.
+  const layerCards = useMemo(() => {
+    if (!standardOutput) return [];
+
+    const problem = standardOutput['문제정의_5칸'] || standardOutput.problem_frame || {};
+    const interview = standardOutput['인터뷰_모드'] || standardOutput.interview_mode || {};
+    const converter = standardOutput['수정요청_변환'] || standardOutput.request_converter || {};
+    const completeness = standardOutput['완성도_진단'] || standardOutput.completeness || {};
+    const impact = standardOutput['변경_영향도'] || standardOutput.impact_preview || {};
+    const layerGuide = Array.isArray(standardOutput['레이어_가이드'])
+      ? standardOutput['레이어_가이드']
+      : (Array.isArray(standardOutput.layer_guide) ? standardOutput.layer_guide : []);
+
+    const roles = Array.isArray(standardOutput['사용자_역할'])
+      ? standardOutput['사용자_역할']
+      : (Array.isArray(standardOutput.users_and_roles) ? standardOutput.users_and_roles : []);
+    const must = (standardOutput['핵심_기능'] || {}).필수 || (standardOutput.core_features || {}).must || [];
+    const flow = toStringArray(standardOutput['화면_흐름_5단계']);
+    const next = toStringArray(standardOutput['오늘_할_일_3개']);
+    const inputFields = Array.isArray(standardOutput['입력_데이터_필드'])
+      ? standardOutput['입력_데이터_필드']
+      : (Array.isArray(standardOutput.input_fields) ? standardOutput.input_fields : []);
+    const permissionRules = Array.isArray(standardOutput['권한_규칙'])
+      ? standardOutput['권한_규칙']
+      : (Array.isArray(standardOutput.permission_matrix) ? standardOutput.permission_matrix : []);
+    const interviewQuestions = toStringArray(interview['추가_질문_3개'] ?? interview.follow_up_questions ?? interview.questions);
+    const completenessScore = Number.isFinite(Number(completeness['점수_0_100'] ?? completeness.score))
+      ? Number(completeness['점수_0_100'] ?? completeness.score)
+      : null;
+    const warnings = toStringArray(completeness['누락_경고'] ?? completeness.warnings);
+
+    const cards = [
+      {
+        id: 'L1',
+        title: 'L1 문제정의 인터뷰',
+        goal: '막연한 아이디어를 먼저 구조화합니다.',
+        lines: [
+          `누가: ${problem.누가 || problem.who || '-'}`,
+          `언제: ${problem.언제 || problem.when || '-'}`,
+          `무엇을: ${problem.무엇을 || problem.what || '-'}`,
+          `왜: ${problem.왜 || problem.why || '-'}`,
+          `성공기준: ${problem.성공기준 || problem.success_criteria || '-'}`,
+          `필요 정보 질문 1: ${interviewQuestions[0] || '-'}`,
+          `필요 정보 질문 2: ${interviewQuestions[1] || '-'}`,
+          `필요 정보 질문 3: ${interviewQuestions[2] || '-'}`,
+        ],
+      },
+      {
+        id: 'L2',
+        title: 'L2 스펙 구조화',
+        goal: '역할/기능/흐름/데이터/권한으로 정리합니다.',
+        lines: [
+          `역할 수: ${roles.length}개`,
+          `필수 기능 수: ${toStringArray(must).length}개`,
+          `화면 흐름: ${flow.length}단계`,
+          `입력 필드 수: ${inputFields.length}개`,
+          `권한 규칙 수: ${permissionRules.length}개`,
+        ],
+      },
+      {
+        id: 'L3',
+        title: 'L3 요청문 변환',
+        goal: '개발자에게 전달할 문장으로 바꿉니다.',
+        lines: [
+          `짧은 요청: ${converter['짧은_요청'] || converter.short || '-'}`,
+          `표준 요청: ${converter['표준_요청'] || converter.standard || '-'}`,
+          `상세 요청: ${converter['상세_요청'] || converter.detailed || '-'}`,
+        ],
+      },
+      {
+        id: 'L4',
+        title: 'L4 실행/검증',
+        goal: '누락과 변경 파급을 먼저 확인합니다.',
+        lines: [
+          `완성도 점수: ${completenessScore ?? '-'} / 100`,
+          `누락 경고: ${warnings.length}개`,
+          `화면 영향: ${toStringArray(impact.화면 || impact.screens).length}개`,
+          `권한 영향: ${toStringArray(impact.권한 || impact.permissions).length}개`,
+          `테스트 영향: ${toStringArray(impact.테스트 || impact.tests).length}개`,
+        ],
+      },
+      {
+        id: 'L5',
+        title: 'L5 학습/실행',
+        goal: '오늘 실행 항목으로 마무리합니다.',
+        lines: next.length ? next.map((item, idx) => `${idx + 1}. ${item}`) : ['오늘 할 일이 비어 있습니다.'],
+      },
+    ];
+
+    return cards.map((card, idx) => {
+      const guide = layerGuide[idx];
+      if (!guide || typeof guide !== 'object') return card;
+      return {
+        ...card,
+        title: guide.레이어 ? `${guide.레이어} ${card.title.replace(/^L\d\s*/, '')}` : card.title,
+        goal: guide.목표 || guide.goal || card.goal,
+      };
+    });
+  }, [standardOutput]);
+
+  // 사고 탭/용어 탭용 마크다운 fallback 데이터
   const thinking = result?.layers?.L1_thinking;
   const thinkingMd = useMemo(() => buildThinkingMarkdown(thinking), [thinking]);
   const glossaryMd = useMemo(() => buildGlossaryMarkdown(result?.glossary), [result]);
 
+  // 현재 탭에 맞는 본문 마크다운 선택기
   const currentTabMarkdown = useMemo(() => {
     if (!result) return '';
     if (activeTab === 'nondev') return result.artifacts?.nondev_spec_md || '';
     if (activeTab === 'dev') return result.artifacts?.dev_spec_md || '';
     if (activeTab === 'thinking') return showThinking ? thinkingMd : '학습 모드가 OFF 상태입니다.';
+    if (activeTab === 'layers') return '';
     if (activeTab === 'glossary') return glossaryMd || '용어사전이 비어 있습니다.';
     return '';
   }, [activeTab, glossaryMd, result, showThinking, thinkingMd]);
 
+  // 용어 "본문에서 위치 보기"에서 사용할 탭별 텍스트 맵
   const tabContentMap = useMemo(() => ({
     nondev: result?.artifacts?.nondev_spec_md || '',
     dev: result?.artifacts?.dev_spec_md || '',
     thinking: thinkingMd || '',
-  }), [result, thinkingMd]);
+    layers: layerCards.map((card) => [card.title, card.goal, ...(card.lines || [])].join('\n')).join('\n'),
+  }), [layerCards, result, thinkingMd]);
 
+  // 텍스트 입력창 높이 자동 확장
+  // 예시: 입력 줄이 늘어나면 textarea 높이도 함께 커집니다.
   useEffect(() => {
     if (!textareaRef.current) return;
     textareaRef.current.style.height = 'auto';
     textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
   }, [vibe]);
 
+  // API 키가 생기면:
+  // 1) 사용 가능한 모델 목록 조회
+  // 2) sessionStorage 동기화
   useEffect(() => {
     if (!apiKey) return;
 
@@ -186,10 +355,13 @@ function App() {
     };
   }, [apiKey]);
 
+  // 용어 탭/레이어 탭이 아닐 때 마지막 본문 탭을 기억합니다.
+  // 이유: 용어에서 "본문으로 돌아가기"할 때 직전 위치를 복원하기 위함입니다.
   useEffect(() => {
-    if (activeTab !== 'glossary') setLastContentTab(activeTab);
+    if (activeTab !== 'glossary' && activeTab !== 'layers') setLastContentTab(activeTab);
   }, [activeTab]);
 
+  // 용어 탭으로 이동한 직후, 해당 용어 카드 위치로 자동 스크롤합니다.
   useEffect(() => {
     if (activeTab !== 'glossary' || !pendingGlossaryFocusTermId) return;
     const node = glossaryCardRefs.current[pendingGlossaryFocusTermId];
@@ -197,6 +369,8 @@ function App() {
     setPendingGlossaryFocusTermId(null);
   }, [activeTab, pendingGlossaryFocusTermId]);
 
+  // 본문 탭에서 특정 용어 하이라이트 위치로 스크롤합니다.
+  // 잠깐 테두리/배경 강조를 주고 자동으로 제거합니다.
   useEffect(() => {
     if (activeTab === 'glossary' || !pendingContentScrollTermId) return;
     const node = contentContainerRef.current?.querySelector(`[data-term-id="${pendingContentScrollTermId}"]`);
@@ -215,7 +389,11 @@ function App() {
     setPendingContentScrollTermId(null);
   }, [activeTab, pendingContentScrollTermId, currentTabMarkdown]);
 
-    // Persists API key according to remember toggle policy.
+  /**
+   * 설정 모달의 키 저장 버튼 핸들러
+   * - remember 체크 시 localStorage에도 저장
+   * - 아니면 sessionStorage만 사용
+   */
   const handleSaveKey = () => {
     const key = tempKey.trim();
     if (!key) return;
@@ -232,7 +410,10 @@ function App() {
     setTempKey('');
   };
 
-    // Main generate action triggered by Transmute button.
+  /**
+   * "Transmute Now" 버튼 클릭 시 실행되는 메인 액션
+   * 입력 검증 -> 모델 호출 -> 성공/실패 상태 업데이트 순서로 동작합니다.
+   */
   const handleTransmute = async () => {
     if (!vibe.trim()) return;
     if (!apiKey) {
@@ -257,7 +438,10 @@ function App() {
     }
   };
 
-    // Shared clipboard helper with temporary success indicator.
+  /**
+   * 공통 복사 함수
+   * 예시: 개발자 스펙/마스터 프롬프트를 복사할 때 재사용합니다.
+   */
   const copyToClipboardWithFeedback = (text, setFlag) => {
     if (!text) return;
     navigator.clipboard.writeText(text);
@@ -273,7 +457,9 @@ function App() {
     copyToClipboardWithFeedback(result?.artifacts?.master_prompt, setCopiedMaster);
   };
 
-    // Injects glossary request template into input for quick iteration.
+  /**
+   * 용어 카드의 "수정 요청 만들기" 템플릿을 입력창에 삽입합니다.
+   */
   const handleUseTemplate = (template) => {
     const text = String(template || '').trim();
     if (!text) return;
@@ -282,7 +468,10 @@ function App() {
     setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
-    // Navigates from glossary card to first matching location in content.
+  /**
+   * 용어 카드 -> 본문 위치 이동
+   * 현재 정책: 직전에 보던 본문 탭(nondev/dev/thinking)으로만 이동합니다.
+   */
   const handleGlossaryCardClick = (termId) => {
     const termItem = glossaryItems.find((item) => item.id === termId);
     const terms = termItem?.searchTerms || [];
@@ -291,32 +480,36 @@ function App() {
       return terms.some((term) => term && text.includes(term));
     };
 
-    const candidates = [lastContentTab, 'nondev', 'dev', 'thinking'];
-    const targetTab = candidates.find((tabId) => hasMatch(tabId));
+    const preferredTab = ['nondev', 'dev', 'thinking'].includes(lastContentTab) ? lastContentTab : 'nondev';
 
     setSelectedTermId(termId);
     setFocusedTermId(termId);
+    setActiveTab(preferredTab);
 
-    if (!targetTab) {
-      setTermLocateMessage('본문 탭(비전공자/개발자/사고)에 이 용어가 직접 포함되어 있지 않습니다.');
+    if (!hasMatch(preferredTab)) {
+      setTermLocateMessage(`직전 탭(${preferredTab})에는 이 용어가 직접 포함되어 있지 않습니다.`);
       window.setTimeout(() => setTermLocateMessage(''), 2200);
       return;
     }
 
     setTermLocateMessage('');
-    setActiveTab(targetTab);
     setPendingContentScrollTermId(termId);
     window.setTimeout(() => setFocusedTermId(null), FOCUS_HIGHLIGHT_MS);
   };
 
-    // Navigates from highlighted content term back to glossary card.
+  /**
+   * 본문에서 하이라이트된 용어를 클릭하면 용어 탭으로 이동합니다.
+   */
   const handleTermClickFromContent = useCallback((termId) => {
     setSelectedTermId(termId);
     setActiveTab('glossary');
     setPendingGlossaryFocusTermId(termId);
   }, []);
 
-    // Finds earliest valid term match in a text node with boundary checks.
+  /**
+   * 텍스트에서 가장 먼저 매칭되는 용어를 찾습니다.
+   * 단어 경계 검사로 오탐(부분 문자열 매칭)을 줄입니다.
+   */
   const findFirstMatch = useCallback((textLower, textOriginal, startIndex = 0) => {
     let best = null;
 
@@ -341,7 +534,10 @@ function App() {
     return best;
   }, [matchers]);
 
-    // Rewrites text nodes into highlighted clickable term chips.
+  /**
+   * 일반 텍스트를 "클릭 가능한 용어 칩(button)"으로 바꿉니다.
+   * 초보자 입장에서는 단어를 눌러 바로 사전으로 이동할 수 있습니다.
+   */
   const highlightTextNode = useCallback((text, keyPrefix) => {
     if (!text || !matchers.length) return text;
 
@@ -386,7 +582,9 @@ function App() {
     return parts;
   }, [findFirstMatch, focusedTermId, handleTermClickFromContent, matchers.length, selectedTermId]);
 
-    // Recursively applies term highlighting to markdown-rendered content.
+  /**
+   * 마크다운 렌더링 트리를 재귀 순회하며 용어 하이라이트를 적용합니다.
+   */
   const renderHighlightedChildren = useCallback(function renderNodeChildren(children, keyPrefix = 'node') {
     return React.Children.map(children, (child, idx) => {
       const key = `${keyPrefix}-${idx}`;
@@ -406,7 +604,10 @@ function App() {
     });
   }, [highlightTextNode]);
 
-    // Custom markdown component map to inject highlighted term spans.
+  /**
+   * ReactMarkdown 컴포넌트 매핑
+   * 각 태그(p, li, h1...)의 children에 하이라이트 로직을 주입합니다.
+   */
   const markdownComponents = useMemo(() => {
     const wrap = (Tag) => ({ children, ...props }) => <Tag {...props}>{renderHighlightedChildren(children, Tag)}</Tag>;
     return {
@@ -429,6 +630,7 @@ function App() {
 
   return (
     <main className="min-h-screen bg-cyber-black flex flex-col items-center justify-start p-4 md:p-8 font-mono text-gray-300">
+      {/* 상단 헤더: 앱 제목, 현재 모델, 학습모드 토글, 설정 버튼 */}
       <header className="w-full max-w-4xl mb-12 flex items-center justify-between border-b border-cyber-cyan-dim pb-4">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-cyber-cyan-dim rounded-sm">
@@ -456,7 +658,9 @@ function App() {
         </div>
       </header>
 
+      {/* 입력/실행/결과 본문 영역 */}
       <section className="w-full max-w-4xl space-y-8">
+        {/* 입력 패널: 사용자가 요구사항(vibe)을 작성하는 곳 */}
         <div className="relative group">
           <div className="absolute -inset-0.5 bg-cyber-cyan opacity-20 group-focus-within:opacity-40 transition-opacity rounded-sm blur-sm"></div>
           <div className="relative bg-[#0a0a0a] border border-cyber-cyan-dim rounded-sm overflow-hidden">
@@ -513,6 +717,7 @@ function App() {
           </div>
         </div>
 
+        {/* 실행 버튼 영역 */}
         <div className="flex justify-center md:justify-end">
           <button
             onClick={handleTransmute}
@@ -529,6 +734,7 @@ function App() {
           </button>
         </div>
 
+        {/* 오류 메시지 패널 */}
         <AnimatePresence>
           {status === 'error' && (
             <Motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="bg-red-500/10 border border-red-500/50 p-4 text-red-500 flex items-center gap-3 text-sm">
@@ -541,10 +747,12 @@ function App() {
           )}
         </AnimatePresence>
 
+        {/* 성공 결과 패널(탭 + 본문) */}
         <AnimatePresence>
           {status === 'success' && result && (
             <Motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="relative bg-[#0f0f0f] border border-cyber-cyan-dim rounded-sm">
               <div className="px-4 py-3 border-b border-cyber-cyan-dim flex justify-between items-center gap-4 flex-wrap">
+                {/* 탭 네비게이션 */}
                 <div className="flex items-center gap-2">
                   {TABS.map((tab) => {
                     const Icon = tab.icon;
@@ -565,6 +773,7 @@ function App() {
                   })}
                 </div>
 
+                {/* 결과 복사 버튼 */}
                 <div className="flex gap-4">
                   <button onClick={handleCopyMasterPrompt} className="flex items-center gap-2 text-xs md:text-sm uppercase text-yellow-500 hover:text-white transition-colors">
                     {copiedMaster ? <><Check className="w-4 h-4" />PROMPT COPIED</> : <><Zap className="w-4 h-4" />COPY MASTER PROMPT</>}
@@ -576,11 +785,17 @@ function App() {
               </div>
 
               <div ref={contentContainerRef} className="p-6 md:p-8 prose prose-invert prose-cyber max-w-none prose-p:text-gray-400 prose-headings:text-cyber-cyan prose-headings:tracking-tighter prose-code:text-cyber-cyan-bright prose-pre:bg-cyber-black/50 prose-pre:border prose-pre:border-cyber-cyan-dim">
-                {activeTab !== 'thinking' && activeTab !== 'glossary' && <ReactMarkdown components={markdownComponents}>{currentTabMarkdown}</ReactMarkdown>}
+                {/* 일반 탭(비전공자/개발자) 마크다운 렌더 */}
+                {activeTab !== 'thinking' && activeTab !== 'glossary' && activeTab !== 'layers' && (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {currentTabMarkdown}
+                  </ReactMarkdown>
+                )}
 
+                {/* 사고 탭 전용 구조화 UI */}
                 {activeTab === 'thinking' && (
                   <>
-                    {!showThinking && <ReactMarkdown>{currentTabMarkdown}</ReactMarkdown>}
+                    {!showThinking && <ReactMarkdown remarkPlugins={[remarkGfm]}>{currentTabMarkdown}</ReactMarkdown>}
                     {showThinking && thinking && (
                       <div className="not-prose space-y-6">
                         <section className="space-y-2">
@@ -656,6 +871,45 @@ function App() {
                   </>
                 )}
 
+                {/* 레이어 탭 전용 카드 UI */}
+                {activeTab === 'layers' && (
+                  <div className="not-prose space-y-6">
+                    <section className="space-y-3 border border-cyber-cyan-dim rounded-md p-4 bg-cyber-black/40">
+                      <p className="text-cyber-cyan-bright text-sm font-semibold">초보자 사고 구조화 레이어 맵</p>
+                      <div className="flex flex-wrap items-center gap-2 text-xs md:text-sm">
+                        {layerCards.map((card, idx) => (
+                          <React.Fragment key={`layer-flow-${card.id}`}>
+                            <span className="px-2.5 py-1 rounded border border-cyber-cyan text-cyber-cyan">{card.id}</span>
+                            {idx < layerCards.length - 1 && <span className="text-gray-500">→</span>}
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    </section>
+
+                    {layerCards.length === 0 && (
+                      <p className="text-gray-300">레이어 데이터가 비어 있습니다. 먼저 변환을 실행해주세요.</p>
+                    )}
+
+                    <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {layerCards.map((card) => (
+                        <article key={`layer-card-${card.id}`} className="border border-cyber-cyan-dim rounded-md p-4 bg-cyber-black/40 space-y-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <h3 className="text-cyber-cyan font-bold text-base">{card.title}</h3>
+                            <span className="text-[11px] px-2 py-1 rounded border border-cyber-cyan-dim text-cyber-cyan">{card.id}</span>
+                          </div>
+                          <p className="text-gray-300 text-sm leading-relaxed">{card.goal}</p>
+                          <ul className="list-disc pl-5 text-gray-300 text-sm space-y-1">
+                            {(card.lines || []).map((line, idx) => (
+                              <li key={`layer-line-${card.id}-${idx}`}>{line}</li>
+                            ))}
+                          </ul>
+                        </article>
+                      ))}
+                    </section>
+                  </div>
+                )}
+
+                {/* 용어 탭 전용 카드 UI */}
                 {activeTab === 'glossary' && (
                   <div className="not-prose space-y-6">
                     <section className="space-y-3 border border-cyber-cyan-dim rounded-md p-4 bg-cyber-black/40">
@@ -776,6 +1030,7 @@ function App() {
         </AnimatePresence>
       </section>
 
+      {/* 설정 모달: API 키 입력/저장 */}
       <AnimatePresence>
         {isSettingsOpen && (
           <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
@@ -823,6 +1078,7 @@ function App() {
         )}
       </AnimatePresence>
 
+      {/* 하단 푸터 */}
       <footer className="mt-20 w-full max-w-4xl border-t border-cyber-cyan-dim/20 pt-8 flex flex-col md:flex-row justify-between items-center text-[10px] text-cyber-cyan/30 gap-4">
         <p>ⓒ 2026 ANTIGRAVITY SYSTEMS. ALL RIGHTS RESERVED.</p>
         <div className="flex gap-6"><span>ENCRYPTION: AES-256</span><span>PROTOCOL: GEMINI-CLIENT-DIRECT</span></div>
