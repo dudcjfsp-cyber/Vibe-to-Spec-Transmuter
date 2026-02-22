@@ -1,3 +1,14 @@
+/**
+ * gemini.js 읽기 가이드(비전공자용)
+ * -------------------------------------------------------
+ * 이 파일은 "AI에게 요청을 보내고, 결과를 앱에서 쓰기 좋은 형태로 정리"하는 역할을 합니다.
+ *
+ * 큰 흐름:
+ * 1) 프롬프트와 출력 스키마(약속된 JSON 모양)를 준비합니다.
+ * 2) 모델 응답을 받습니다. JSON이 깨지면 1회 자동 복구를 시도합니다.
+ * 3) 누락값을 기본값으로 채워 UI가 항상 렌더되도록 정규화합니다.
+ * 4) 비전공자 문서/개발자 문서/마스터 프롬프트를 함께 만들어 반환합니다.
+ */
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // -------------------------------------------------------
@@ -1077,6 +1088,12 @@ function normalizeStandardOutput(raw) {
   return baseSpec;
 }
 
+// -------------------------------------------------------
+// UI 반환 데이터 조립 영역
+// -------------------------------------------------------
+// 여기서는 "정규화된 스키마"를 바탕으로
+// 화면에서 바로 사용할 결과 묶음(artifacts/layers/glossary)을 만듭니다.
+
 /**
  * 현재 UI가 기대하는 결과 형태로 묶어 반환합니다.
  * (artifacts/layers/glossary + standard_output 동시 제공)
@@ -1103,6 +1120,11 @@ function normalizeResult(raw, fallbackModel) {
     glossary: buildCompatibilityGlossary(spec),
   };
 }
+
+// -------------------------------------------------------
+// 모델 호출/복구 영역
+// -------------------------------------------------------
+// 이 구간은 실제 AI 호출과 JSON 복구 재시도 로직을 담당합니다.
 
 /**
  * 모델 호출 프롬프트를 생성합니다.
@@ -1141,6 +1163,11 @@ async function parseJsonWithOneRetry(model, vibe, showThinking) {
     return JSON.parse(extractJsonText(repairedText));
   }
 }
+
+// -------------------------------------------------------
+// 외부 공개 함수(export)
+// -------------------------------------------------------
+// 다른 파일(App.jsx)에서 실제로 직접 호출하는 함수들입니다.
 
 /**
  * API 키 기준으로 사용 가능한 생성 모델 목록을 조회합니다.
@@ -1189,6 +1216,11 @@ async function getOptimalModel(apiKey) {
 /**
  * UI에서 호출하는 메인 엔트리 함수입니다.
  * 입력(vibe)을 받아 모델 실행 -> 파싱/정규화 -> UI 친화 결과 반환까지 담당합니다.
+ *
+ * 비전공자 관점 비유:
+ * - vibe: "요청 메모"
+ * - 모델 응답: "초안 문서"
+ * - normalizeResult: "양식에 맞춘 최종 제출본"
  */
 export async function transmuteVibeToSpec(vibe, apiKey, { showThinking = true } = {}) {
   if (!apiKey) {

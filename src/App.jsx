@@ -1,16 +1,28 @@
 ﻿
+/**
+ * App.jsx 읽기 가이드(비전공자용)
+ * 1) 입력창에 요구사항을 적습니다.
+ * 2) "사고 구조화 시작"을 누르면 AI가 표준 형식으로 정리합니다.
+ * 3) 탭(비전공자/개발자/사고/레이어/용어)에서 결과를 확인합니다.
+ *
+ * 이 파일은 "화면(UI) + 화면에서 쓰는 상태 관리"를 담당합니다.
+ */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion as Motion, AnimatePresence } from 'framer-motion';
-import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert, Settings, X, Key, Brain, BookOpen, Code, User, Layers3 } from 'lucide-react';
+import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert, Settings, X, Key, Brain, BookOpen, Code, User, Layers3, ExternalLink } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { transmuteVibeToSpec, fetchAvailableModels } from './lib/gemini';
+import { transmuteVibeToSpec } from './lib/gemini';
 
 // -------------------------------------------------------
 // 전역 상수
 // -------------------------------------------------------
 // API 키를 브라우저 저장소에 넣을 때 사용할 키 이름입니다.
 const API_KEY_STORAGE_KEY = 'gemini_api_key';
+// API 키 저장 시각(ms)을 저장할 키 이름입니다.
+const API_KEY_SAVED_AT_STORAGE_KEY = 'gemini_api_key_saved_at';
+// API 키의 세션 유효시간(30분)입니다.
+const API_KEY_TTL_MS = 30 * 60 * 1000;
 // "복사 완료" 표시가 유지되는 시간(ms)입니다.
 const CLIPBOARD_RESET_MS = 2000;
 // 용어 카드 정렬 순서(개념 흐름)입니다.
@@ -27,13 +39,71 @@ const TABS = [
   { id: 'glossary', label: '용어', icon: BookOpen },
 ];
 
+// "본문 내용"으로 취급하는 탭 목록입니다.
+// 용어 탭에서 "본문으로 돌아가기"할 때 이 목록을 기준으로 복원합니다.
+const CONTENT_TAB_IDS = ['nondev', 'dev', 'thinking'];
+
+/**
+ * 전달받은 탭 ID가 본문 탭인지 검사합니다.
+ * 예시: "dev" -> true, "glossary" -> false
+ */
+function isContentTab(tabId) {
+  return CONTENT_TAB_IDS.includes(tabId);
+}
+
+/**
+ * API 키 저장소를 비웁니다.
+ * - 현재 세션 키 삭제
+ * - 과거 버전에서 남았을 수 있는 localStorage 키도 함께 삭제
+ */
+function clearStoredApiKey() {
+  sessionStorage.removeItem(API_KEY_STORAGE_KEY);
+  sessionStorage.removeItem(API_KEY_SAVED_AT_STORAGE_KEY);
+  localStorage.removeItem(API_KEY_STORAGE_KEY);
+}
+
+/**
+ * 저장 시각 기준으로 API 키 만료 여부를 확인합니다.
+ */
+function isApiKeyExpired(savedAtMs) {
+  return !Number.isFinite(savedAtMs) || (Date.now() - savedAtMs > API_KEY_TTL_MS);
+}
+
+/**
+ * API 키를 세션 저장소에 저장합니다.
+ * 저장 시각도 함께 기록해 TTL(30분)을 계산할 수 있게 합니다.
+ */
+function persistApiKeyToSession(key) {
+  sessionStorage.setItem(API_KEY_STORAGE_KEY, key);
+  sessionStorage.setItem(API_KEY_SAVED_AT_STORAGE_KEY, String(Date.now()));
+  // 과거 버전에서 남은 localStorage 키는 즉시 제거합니다.
+  localStorage.removeItem(API_KEY_STORAGE_KEY);
+}
+
 /**
  * 저장된 API 키를 읽습니다.
- * 우선순위: sessionStorage -> localStorage
- * 예시: 탭 새로고침 후에도 임시 키를 복구할 수 있습니다.
+ * 정책:
+ * - sessionStorage만 사용
+ * - 30분 TTL이 지나면 자동 무효화
  */
 function getStoredApiKey() {
-  return sessionStorage.getItem(API_KEY_STORAGE_KEY) || localStorage.getItem(API_KEY_STORAGE_KEY) || '';
+  const key = sessionStorage.getItem(API_KEY_STORAGE_KEY) || '';
+  const savedAtMs = Number(sessionStorage.getItem(API_KEY_SAVED_AT_STORAGE_KEY));
+
+  // 과거 버전(localStorage 저장) 데이터는 앱 시작 시 정리합니다.
+  localStorage.removeItem(API_KEY_STORAGE_KEY);
+
+  if (!key) {
+    sessionStorage.removeItem(API_KEY_SAVED_AT_STORAGE_KEY);
+    return '';
+  }
+
+  if (isApiKeyExpired(savedAtMs)) {
+    clearStoredApiKey();
+    return '';
+  }
+
+  return key;
 }
 
 /**
@@ -91,12 +161,12 @@ function buildGlossaryMarkdown(glossary) {
 function getDecisionBadge(decision) {
   const normalized = String(decision || '').toLowerCase();
   if (normalized.includes('adopt') || normalized.includes('추천')) {
-    return { label: '추천', className: 'text-green-400 border-green-500/40 bg-green-500/10' };
+    return { label: '추천', className: 'text-emerald-700 border-emerald-200 bg-emerald-50' };
   }
   if (normalized.includes('reject') || normalized.includes('배제')) {
-    return { label: '배제', className: 'text-red-400 border-red-500/40 bg-red-500/10' };
+    return { label: '배제', className: 'text-rose-700 border-rose-200 bg-rose-50' };
   }
-  return { label: '보류', className: 'text-orange-300 border-orange-500/40 bg-orange-500/10' };
+  return { label: '보류', className: 'text-amber-700 border-amber-200 bg-amber-50' };
 }
 
 /**
@@ -155,7 +225,6 @@ function App() {
   // API 키 설정 모달 관련 상태
   const [apiKey, setApiKey] = useState(getStoredApiKey);
   const [isSettingsOpen, setIsSettingsOpen] = useState(!getStoredApiKey());
-  const [rememberThisDevice, setRememberThisDevice] = useState(Boolean(localStorage.getItem(API_KEY_STORAGE_KEY)));
   const [tempKey, setTempKey] = useState('');
 
   // DOM 참조(ref): 자동 높이 조절, 스크롤 이동, 용어 카드 포커스
@@ -329,37 +398,49 @@ function App() {
     textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
   }, [vibe]);
 
-  // API 키가 생기면:
-  // 1) 사용 가능한 모델 목록 조회
-  // 2) sessionStorage 동기화
+  // 과거 버전에서 localStorage에 남은 키를 앱 시작 시 정리합니다.
+  useEffect(() => {
+    localStorage.removeItem(API_KEY_STORAGE_KEY);
+  }, []);
+
+  // 세션 키 TTL(30분) 만료를 타이머로 감시합니다.
+  // 만료 시 키를 비우고 설정 모달을 다시 열어 재입력을 유도합니다.
   useEffect(() => {
     if (!apiKey) return;
 
-    let cancelled = false;
-    fetchAvailableModels(apiKey)
-      .then((models) => {
-        if (!cancelled && models && models.length > 0) {
-          setActiveModel(models[0].toUpperCase());
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setActiveModel('LINK FAILURE');
-      });
-
-    if (!sessionStorage.getItem(API_KEY_STORAGE_KEY)) {
-      sessionStorage.setItem(API_KEY_STORAGE_KEY, apiKey);
+    const savedAtMs = Number(sessionStorage.getItem(API_KEY_SAVED_AT_STORAGE_KEY));
+    if (isApiKeyExpired(savedAtMs)) {
+      clearStoredApiKey();
+      setApiKey('');
+      setActiveModel('OFFLINE');
+      setIsSettingsOpen(true);
+      return;
     }
 
-    return () => {
-      cancelled = true;
-    };
+    const remainingMs = API_KEY_TTL_MS - (Date.now() - savedAtMs);
+    const timerId = window.setTimeout(() => {
+      clearStoredApiKey();
+      setApiKey('');
+      setActiveModel('OFFLINE');
+      setIsSettingsOpen(true);
+    }, remainingMs);
+
+    return () => window.clearTimeout(timerId);
   }, [apiKey]);
 
   // 용어 탭/레이어 탭이 아닐 때 마지막 본문 탭을 기억합니다.
   // 이유: 용어에서 "본문으로 돌아가기"할 때 직전 위치를 복원하기 위함입니다.
   useEffect(() => {
-    if (activeTab !== 'glossary' && activeTab !== 'layers') setLastContentTab(activeTab);
+    if (isContentTab(activeTab)) setLastContentTab(activeTab);
   }, [activeTab]);
+
+  // 학습 모드를 OFF로 전환했는데 사고 탭을 보고 있다면,
+  // 즉시 비전공자 탭으로 이동시켜 "변화 없음"처럼 보이는 문제를 줄입니다.
+  useEffect(() => {
+    if (!showThinking && activeTab === 'thinking') {
+      setActiveTab('nondev');
+    }
+  }, [activeTab, showThinking]);
 
   // 용어 탭으로 이동한 직후, 해당 용어 카드 위치로 자동 스크롤합니다.
   useEffect(() => {
@@ -376,13 +457,13 @@ function App() {
     const node = contentContainerRef.current?.querySelector(`[data-term-id="${pendingContentScrollTermId}"]`);
     if (node) {
       node.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      node.classList.add('ring-2', 'ring-yellow-300', 'ring-offset-1', 'ring-offset-black');
+      node.classList.add('ring-2', 'ring-yellow-300', 'ring-offset-1', 'ring-offset-white');
 
       const block = node.closest('p, li, blockquote, td, th');
       block?.classList.add('bg-yellow-500/10', 'rounded', 'px-1');
 
       window.setTimeout(() => {
-        node.classList.remove('ring-2', 'ring-yellow-300', 'ring-offset-1', 'ring-offset-black');
+        node.classList.remove('ring-2', 'ring-yellow-300', 'ring-offset-1', 'ring-offset-white');
         block?.classList.remove('bg-yellow-500/10', 'rounded', 'px-1');
       }, FOCUS_HIGHLIGHT_MS);
     }
@@ -391,19 +472,14 @@ function App() {
 
   /**
    * 설정 모달의 키 저장 버튼 핸들러
-   * - remember 체크 시 localStorage에도 저장
-   * - 아니면 sessionStorage만 사용
+   * - sessionStorage에만 저장
+   * - 저장 시각도 함께 기록해 TTL(30분)을 적용
    */
   const handleSaveKey = () => {
     const key = tempKey.trim();
     if (!key) return;
 
-    sessionStorage.setItem(API_KEY_STORAGE_KEY, key);
-    if (rememberThisDevice) {
-      localStorage.setItem(API_KEY_STORAGE_KEY, key);
-    } else {
-      localStorage.removeItem(API_KEY_STORAGE_KEY);
-    }
+    persistApiKeyToSession(key);
 
     setApiKey(key);
     setIsSettingsOpen(false);
@@ -411,7 +487,7 @@ function App() {
   };
 
   /**
-   * "Transmute Now" 버튼 클릭 시 실행되는 메인 액션
+   * "사고 구조화 시작" 버튼 클릭 시 실행되는 메인 액션
    * 입력 검증 -> 모델 호출 -> 성공/실패 상태 업데이트 순서로 동작합니다.
    */
   const handleTransmute = async () => {
@@ -420,6 +496,20 @@ function App() {
       setIsSettingsOpen(true);
       return;
     }
+
+    // 실행 직전에 TTL 만료 여부를 다시 점검합니다.
+    // (앱이 켜진 뒤 시간이 지난 경우를 대비)
+    const savedAtMs = Number(sessionStorage.getItem(API_KEY_SAVED_AT_STORAGE_KEY));
+    if (isApiKeyExpired(savedAtMs)) {
+      clearStoredApiKey();
+      setApiKey('');
+      setActiveModel('OFFLINE');
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    // 사용 중인 키는 만료 시각을 갱신해 세션 사용성을 유지합니다.
+    persistApiKeyToSession(apiKey);
 
     setStatus('processing');
     setResult(null);
@@ -480,7 +570,9 @@ function App() {
       return terms.some((term) => term && text.includes(term));
     };
 
-    const preferredTab = ['nondev', 'dev', 'thinking'].includes(lastContentTab) ? lastContentTab : 'nondev';
+    // 직전에 보던 본문 탭으로 되돌아갑니다.
+    // 본문 탭이 아니었다면 기본값(비전공자 탭)으로 이동합니다.
+    const preferredTab = isContentTab(lastContentTab) ? lastContentTab : 'nondev';
 
     setSelectedTermId(termId);
     setFocusedTermId(termId);
@@ -568,7 +660,7 @@ function App() {
           onClick={() => handleTermClickFromContent(matched.id)}
           className={`inline-flex items-center align-middle rounded-md px-2 py-1 mx-0.5 border text-xs font-semibold transition-colors ${active
             ? 'bg-yellow-300 text-black border-yellow-200 shadow-[0_0_0_2px_rgba(250,204,21,0.25)]'
-            : 'bg-cyber-cyan/15 text-cyber-cyan-bright border-cyber-cyan/40 hover:bg-cyber-cyan/25'
+            : 'bg-blue-50 text-blue-600 border-blue-300/40 hover:bg-blue-100'
             }`}
         >
           {token}
@@ -628,44 +720,73 @@ function App() {
     };
   }, [renderHighlightedChildren]);
 
+  const learningModeSummary = showThinking
+    ? '학습모드 ON: 사고 탭이 활성화되어 가정·질문·대안 비교를 함께 확인합니다.'
+    : '학습모드 OFF: 사고 탭을 비활성화하고 비전공자/개발자 결과 위주로 빠르게 확인합니다.';
+
+  // 비전공자/개발자 탭은 "일반 마크다운 렌더러"를 그대로 씁니다.
+  // 사고/레이어/용어 탭은 각 탭 전용 UI를 사용하므로 별도 분기합니다.
+  const shouldRenderGeneralMarkdown = activeTab === 'nondev' || activeTab === 'dev';
+
   return (
-    <main className="min-h-screen bg-cyber-black flex flex-col items-center justify-start p-4 md:p-8 font-mono text-gray-300">
+    <main className="min-h-screen bg-gradient-to-b from-blue-50 via-white to-slate-100 flex flex-col items-center justify-start p-4 md:p-8 font-sans text-slate-800">
       {/* 상단 헤더: 앱 제목, 현재 모델, 학습모드 토글, 설정 버튼 */}
-      <header className="w-full max-w-4xl mb-12 flex items-center justify-between border-b border-cyber-cyan-dim pb-4">
+      <header className="w-full max-w-5xl mb-8 flex items-center justify-between border border-slate-200 rounded-xl px-4 py-4 md:px-6 bg-white/90 shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-cyber-cyan-dim rounded-sm">
-            <Cpu className="w-6 h-6 text-cyber-cyan shadow-[0_0_10px_rgba(0,240,255,0.5)]" />
+          <div className="p-2 bg-blue-100 rounded-lg">
+            <Cpu className="w-6 h-6 text-blue-700" />
           </div>
-          <h1 className="text-xl md:text-2xl font-bold tracking-tighter text-cyber-cyan uppercase">Vibe-to-Spec Transmuter</h1>
+          <div className="space-y-1">
+            <h1 className="text-xl md:text-2xl font-bold tracking-tight text-blue-700">사고 구조화 도우미</h1>
+            <p className="text-xs md:text-sm text-slate-500">비전공자와 바이브코딩 초보자를 위한 요구사항 정리 도구</p>
+          </div>
         </div>
         <div className="flex items-center gap-4">
-          <div className="hidden md:flex items-center gap-2 text-[10px] text-cyber-cyan-bright opacity-50 border-r border-cyber-cyan-dim pr-4 mr-2">
+          <div className="hidden md:flex items-center gap-2 text-[11px] text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-md">
             <Terminal className="w-3 h-3" />
-            <span>NEURAL LINK: {activeModel}</span>
+            <span>사용 모델: {activeModel}</span>
           </div>
           <button
             onClick={() => setShowThinking((v) => !v)}
-            className={`px-4 py-2.5 text-sm uppercase border rounded-sm transition-colors ${showThinking
-              ? 'border-cyber-cyan text-cyber-cyan hover:bg-cyber-cyan-dim'
-              : 'border-gray-600 text-gray-400 hover:text-white'
+            className={`px-4 py-2.5 text-sm border rounded-lg transition-colors ${showThinking
+              ? 'border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100'
+              : 'border-slate-300 text-slate-700 hover:bg-slate-50'
               }`}
           >
-            학습 모드: {showThinking ? 'ON' : 'OFF'}
+            학습 모드: {showThinking ? 'ON (사고 포함)' : 'OFF (빠른 확인)'}
           </button>
-          <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-cyber-cyan-dim rounded-sm transition-colors text-cyber-cyan">
+          <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-blue-50 rounded-lg transition-colors text-blue-700">
             <Settings className="w-5 h-5" />
           </button>
         </div>
       </header>
 
       {/* 입력/실행/결과 본문 영역 */}
-      <section className="w-full max-w-4xl space-y-8">
+      <section className="w-full max-w-5xl space-y-8">
+        <div className={`rounded-lg border px-4 py-3 text-sm ${showThinking ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-slate-300 bg-slate-50 text-slate-700'}`}>
+          <span className="font-semibold">학습모드 안내:</span> {learningModeSummary}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className={`rounded-lg border px-4 py-3 bg-white ${vibe.trim() ? 'border-blue-300' : 'border-slate-200'}`}>
+            <p className="text-[11px] font-semibold text-blue-700">1단계</p>
+            <p className="text-sm text-slate-700">문제 입력</p>
+          </div>
+          <div className={`rounded-lg border px-4 py-3 bg-white ${(status === 'processing' || status === 'success') ? 'border-blue-300' : 'border-slate-200'}`}>
+            <p className="text-[11px] font-semibold text-blue-700">2단계</p>
+            <p className="text-sm text-slate-700">구조화 생성</p>
+          </div>
+          <div className={`rounded-lg border px-4 py-3 bg-white ${status === 'success' ? 'border-blue-300' : 'border-slate-200'}`}>
+            <p className="text-[11px] font-semibold text-blue-700">3단계</p>
+            <p className="text-sm text-slate-700">탭별 확인/수정</p>
+          </div>
+        </div>
+
         {/* 입력 패널: 사용자가 요구사항(vibe)을 작성하는 곳 */}
         <div className="relative group">
-          <div className="absolute -inset-0.5 bg-cyber-cyan opacity-20 group-focus-within:opacity-40 transition-opacity rounded-sm blur-sm"></div>
-          <div className="relative bg-[#0a0a0a] border border-cyber-cyan-dim rounded-sm overflow-hidden">
-            <div className="px-4 py-2 border-b border-cyber-cyan-dim flex justify-between items-center text-[10px] uppercase text-cyber-cyan-bright">
-              <span>Input_Vibe.stream</span>
+          <div className="relative bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="px-4 py-2.5 border-b border-slate-200 flex justify-between items-center text-[11px] text-blue-700 font-semibold">
+              <span>요구사항 입력</span>
               <div className="flex gap-1.5">
                 <div className="w-2 h-2 rounded-full bg-red-500/50"></div>
                 <div className="w-2 h-2 rounded-full bg-yellow-500/50"></div>
@@ -679,16 +800,16 @@ function App() {
                 value={vibe}
                 onChange={(e) => setVibe(e.target.value)}
                 placeholder="만들고 싶은 기능/분위기/제약을 자유롭게 입력하세요."
-                className="w-full bg-transparent p-6 outline-none resize-none min-h-[160px] text-cyber-cyan placeholder:text-cyber-cyan/30 text-lg leading-relaxed transition-all duration-300 focus:shadow-[inset_0_0_20px_rgba(0,240,255,0.05)]"
+                className="w-full bg-transparent p-6 outline-none resize-none min-h-[160px] text-slate-800 placeholder:text-slate-400 text-base md:text-lg leading-relaxed transition-all duration-300 focus:bg-blue-50/20"
                 disabled={status === 'processing' || !apiKey}
               />
 
               {!apiKey && (
-                <div className="absolute inset-0 bg-cyber-black/80 backdrop-blur-sm flex items-center justify-center p-6 text-center">
+                <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex items-center justify-center p-6 text-center">
                   <div className="flex flex-col items-center gap-4 max-w-xs">
                     <ShieldAlert className="w-12 h-12 text-yellow-500 animate-pulse" />
-                    <p className="text-cyber-cyan font-bold uppercase tracking-widest text-sm">Neural Link Offline</p>
-                    <p className="text-gray-400 text-xs leading-relaxed">API 키를 설정하면 변환을 시작할 수 있습니다.</p>
+                    <p className="text-blue-700 font-bold text-sm">API 키가 필요합니다</p>
+                    <p className="text-slate-600 text-xs leading-relaxed">API 키를 설정하면 변환을 시작할 수 있습니다.</p>
                   </div>
                 </div>
               )}
@@ -696,18 +817,17 @@ function App() {
               <AnimatePresence>
                 {status === 'processing' && (
                   <>
-                    <Motion.div initial={{ top: 0 }} animate={{ top: '100%' }} transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }} className="scan-line" />
                     <Motion.div
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
-                      className="absolute inset-0 bg-cyber-cyan/5 backdrop-blur-[1px] pointer-events-none flex items-center justify-center"
+                      className="absolute inset-0 bg-blue-50/70 backdrop-blur-[1px] pointer-events-none flex items-center justify-center"
                     >
                       <div className="flex flex-col items-center gap-4">
                         <Motion.div animate={{ rotate: 360 }} transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}>
-                          <Zap className="w-8 h-8 text-cyber-cyan" />
+                          <Zap className="w-8 h-8 text-blue-700" />
                         </Motion.div>
-                        <span className="text-cyber-cyan text-xs tracking-[0.2em] font-bold animate-pulse">PROCESSING VIBE...</span>
+                        <span className="text-blue-700 text-xs tracking-[0.2em] font-bold animate-pulse">구조화 중...</span>
                       </div>
                     </Motion.div>
                   </>
@@ -723,25 +843,23 @@ function App() {
             onClick={handleTransmute}
             disabled={status === 'processing' || !vibe.trim() || !apiKey}
             className={`
-              relative px-12 py-4 bg-cyber-cyan text-cyber-black font-extrabold uppercase tracking-[0.15em] transition-all duration-200
-              disabled:opacity-30 disabled:cursor-not-allowed glitch-hover
-              ${(vibe.trim() && apiKey) ? 'hover:shadow-[0_0_25px_rgba(0,240,255,0.6)] cursor-pointer' : ''}
+              px-8 md:px-12 py-3.5 bg-blue-600 text-white font-bold rounded-lg border border-blue-700 transition-all duration-200
+              disabled:opacity-30 disabled:cursor-not-allowed
+              ${(vibe.trim() && apiKey) ? 'hover:bg-blue-700 hover:-translate-y-0.5 cursor-pointer' : ''}
             `}
           >
-            {status === 'processing' ? 'Transmuting...' : 'Transmute Now'}
-            <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-white"></div>
-            <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-white"></div>
+            {status === 'processing' ? '구조화 중...' : '사고 구조화 시작'}
           </button>
         </div>
 
         {/* 오류 메시지 패널 */}
         <AnimatePresence>
           {status === 'error' && (
-            <Motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="bg-red-500/10 border border-red-500/50 p-4 text-red-500 flex items-center gap-3 text-sm">
+            <Motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="bg-rose-50 border border-rose-200 p-4 text-rose-700 rounded-lg flex items-center gap-3 text-sm">
               <ShieldAlert className="w-5 h-5" />
               <div className="flex flex-col">
                 <span className="font-bold">생성 실패: 모델 응답 또는 JSON 파싱 오류</span>
-                <span className="text-[10px] opacity-70 italic">API 키/쿼터/입력 내용을 확인해주세요.</span>
+                <span className="text-[11px] opacity-80">API 키, 쿼터, 입력 내용을 다시 확인해주세요.</span>
               </div>
             </Motion.div>
           )}
@@ -750,43 +868,73 @@ function App() {
         {/* 성공 결과 패널(탭 + 본문) */}
         <AnimatePresence>
           {status === 'success' && result && (
-            <Motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="relative bg-[#0f0f0f] border border-cyber-cyan-dim rounded-sm">
-              <div className="px-4 py-3 border-b border-cyber-cyan-dim flex justify-between items-center gap-4 flex-wrap">
+            <Motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="relative bg-white border border-slate-200 rounded-xl shadow-sm">
+              <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-start gap-4">
                 {/* 탭 네비게이션 */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   {TABS.map((tab) => {
                     const Icon = tab.icon;
                     const selected = activeTab === tab.id;
+                    const isThinkingDisabled = tab.id === 'thinking' && !showThinking;
                     return (
                       <button
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
-                        className={`flex items-center gap-2 px-3 py-2 text-xs md:text-sm uppercase border rounded-sm transition-colors ${selected
-                          ? 'text-cyber-cyan border-cyber-cyan bg-cyber-cyan-dim/20'
-                          : 'text-gray-400 border-gray-700 hover:text-white'
-                          }`}
+                        onClick={() => {
+                          if (!isThinkingDisabled) setActiveTab(tab.id);
+                        }}
+                        disabled={isThinkingDisabled}
+                        title={isThinkingDisabled ? '학습모드 OFF에서는 사고 탭이 비활성화됩니다.' : undefined}
+                        className={`flex items-center gap-2 px-3 py-2 text-xs md:text-sm border rounded-lg transition-colors ${selected
+                          ? 'text-blue-700 border-blue-300 bg-blue-50'
+                          : 'text-slate-700 border-slate-300 hover:bg-slate-50'
+                          } ${isThinkingDisabled ? 'opacity-45 cursor-not-allowed' : ''}`}
                       >
                         <Icon className="w-4 h-4" />
                         {tab.label}
+                        {isThinkingDisabled && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 bg-slate-100 text-slate-600">OFF</span>
+                        )}
                       </button>
                     );
                   })}
                 </div>
 
-                {/* 결과 복사 버튼 */}
-                <div className="flex gap-4">
-                  <button onClick={handleCopyMasterPrompt} className="flex items-center gap-2 text-xs md:text-sm uppercase text-yellow-500 hover:text-white transition-colors">
-                    {copiedMaster ? <><Check className="w-4 h-4" />PROMPT COPIED</> : <><Zap className="w-4 h-4" />COPY MASTER PROMPT</>}
-                  </button>
-                  <button onClick={handleCopyDevSpec} className="flex items-center gap-2 text-xs md:text-sm uppercase text-cyber-cyan-bright hover:text-white transition-colors">
-                    {copied ? <><Check className="w-4 h-4" />DEV SPEC COPIED</> : <><Copy className="w-4 h-4" />COPY DEV SPEC</>}
-                  </button>
+                {/* 결과 복사 버튼 + 사용 시점 가이드 */}
+                <div className="ml-auto w-full lg:w-auto flex flex-col items-end gap-2">
+                  <div className="flex items-center justify-end gap-4 flex-wrap">
+                    <button
+                      onClick={handleCopyMasterPrompt}
+                      title="Antigravity에 붙여넣어 구현 요청을 시작할 때 사용"
+                      className="flex items-center gap-2 text-xs md:text-sm text-amber-700 hover:text-amber-800 transition-colors"
+                    >
+                      {copiedMaster ? <><Check className="w-4 h-4" />Antigravity 프롬프트 복사됨</> : <><Zap className="w-4 h-4" />Antigravity용 프롬프트 복사</>}
+                    </button>
+                    <button
+                      onClick={handleCopyDevSpec}
+                      title="사람 개발자/팀에 공유해 구현 범위를 합의할 때 사용"
+                      className="flex items-center gap-2 text-xs md:text-sm text-blue-700 hover:text-blue-800 transition-colors"
+                    >
+                      {copied ? <><Check className="w-4 h-4" />개발 전달 스펙 복사됨</> : <><Copy className="w-4 h-4" />개발 전달용 스펙 복사</>}
+                    </button>
+                  </div>
+
+                  <div className="w-full lg:w-[620px] grid grid-cols-1 gap-2">
+                    <div className="px-3 py-2 rounded-md border border-amber-200 bg-amber-50 text-[11px] text-amber-800">
+                      <span className="font-semibold">Antigravity용 프롬프트:</span> Antigravity에 붙여넣어 코드 생성을 요청할 때 사용
+                    </div>
+                    <div className="px-3 py-2 rounded-md border border-blue-200 bg-blue-50 text-[11px] text-blue-800">
+                      <span className="font-semibold">개발 전달용 스펙:</span> 사람 개발자/팀과 요구사항을 문서로 공유해 범위를 먼저 합의할 때 사용
+                    </div>
+                    <div className="px-3 py-2 rounded-md border border-slate-200 bg-slate-50 text-[11px] text-slate-700">
+                      <span className="font-semibold">Antigravity 사용 순서:</span> 1) 개발 전달용 스펙으로 범위 확인 → 2) Antigravity용 프롬프트로 구현 요청 → 3) 결과를 스펙과 비교해 검수
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div ref={contentContainerRef} className="p-6 md:p-8 prose prose-invert prose-cyber max-w-none prose-p:text-gray-400 prose-headings:text-cyber-cyan prose-headings:tracking-tighter prose-code:text-cyber-cyan-bright prose-pre:bg-cyber-black/50 prose-pre:border prose-pre:border-cyber-cyan-dim">
+              <div ref={contentContainerRef} className="p-6 md:p-8 prose prose-cyber max-w-none prose-p:text-slate-700 prose-headings:text-blue-700 prose-headings:tracking-tight prose-code:text-blue-700 prose-pre:bg-slate-50 prose-pre:border prose-pre:border-slate-200">
                 {/* 일반 탭(비전공자/개발자) 마크다운 렌더 */}
-                {activeTab !== 'thinking' && activeTab !== 'glossary' && activeTab !== 'layers' && (
+                {shouldRenderGeneralMarkdown && (
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                     {currentTabMarkdown}
                   </ReactMarkdown>
@@ -799,13 +947,13 @@ function App() {
                     {showThinking && thinking && (
                       <div className="not-prose space-y-6">
                         <section className="space-y-2">
-                          <h3 className="text-cyber-cyan font-bold text-lg">문제 재진술</h3>
-                          <p className="text-gray-300 leading-relaxed">{thinking.interpretation || '-'}</p>
+                          <h3 className="text-blue-700 font-bold text-lg">문제 재진술</h3>
+                          <p className="text-slate-800 leading-relaxed">{thinking.interpretation || '-'}</p>
                         </section>
 
                         <section className="space-y-2">
-                          <h3 className="text-cyber-cyan font-bold text-lg">가정</h3>
-                          <ul className="list-disc pl-5 text-gray-300 space-y-1">
+                          <h3 className="text-blue-700 font-bold text-lg">가정</h3>
+                          <ul className="list-disc pl-5 text-slate-800 space-y-1">
                             {(thinking.assumptions || []).length === 0 && <li>-</li>}
                             {(thinking.assumptions || []).map((item, idx) => (
                               <li key={`assumption-${idx}`}>{item}</li>
@@ -814,8 +962,8 @@ function App() {
                         </section>
 
                         <section className="space-y-2">
-                          <h3 className="text-cyber-cyan font-bold text-lg">불확실 / 질문</h3>
-                          <ul className="list-disc pl-5 text-gray-300 space-y-1">
+                          <h3 className="text-blue-700 font-bold text-lg">불확실 / 질문</h3>
+                          <ul className="list-disc pl-5 text-slate-800 space-y-1">
                             {(thinking.uncertainties || []).length === 0 && <li>-</li>}
                             {(thinking.uncertainties || []).map((item, idx) => (
                               <li key={`uncertainty-${idx}`}>{item}</li>
@@ -824,14 +972,14 @@ function App() {
                         </section>
 
                         <section className="space-y-4">
-                          <h3 className="text-cyber-cyan font-bold text-lg">대안 비교</h3>
-                          {(thinking.alternatives || []).length === 0 && <p className="text-gray-300">-</p>}
+                          <h3 className="text-blue-700 font-bold text-lg">대안 비교</h3>
+                          {(thinking.alternatives || []).length === 0 && <p className="text-slate-800">-</p>}
                           {(thinking.alternatives || []).map((alt, idx) => {
                             const decision = getDecisionBadge(alt.decision);
                             return (
-                              <article key={`alternative-${idx}`} className="border border-cyber-cyan-dim rounded-md p-4 bg-cyber-black/40 space-y-4">
+                              <article key={`alternative-${idx}`} className="border border-slate-200 rounded-md p-4 bg-white space-y-4">
                                 <div className="flex items-center justify-between gap-3 flex-wrap">
-                                  <h4 className="text-cyber-cyan-bright font-bold text-base">
+                                  <h4 className="text-blue-600 font-bold text-base">
                                     대안 {idx + 1} ({alt.name || 'N/A'})
                                   </h4>
                                   <span className={`text-xs md:text-sm px-2.5 py-1 rounded border ${decision.className}`}>
@@ -840,9 +988,9 @@ function App() {
                                 </div>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <div className="border border-green-500/30 rounded p-3 bg-green-500/5">
-                                    <p className="text-green-300 font-bold mb-2">장점</p>
-                                    <ul className="list-disc pl-5 text-gray-200 space-y-1">
+                                  <div className="border border-emerald-200 rounded p-3 bg-emerald-50">
+                                    <p className="text-emerald-700 font-bold mb-2">장점</p>
+                                    <ul className="list-disc pl-5 text-slate-700 space-y-1">
                                       {(alt.pros || []).length === 0 && <li>-</li>}
                                       {(alt.pros || []).map((item, pIdx) => (
                                         <li key={`pros-${idx}-${pIdx}`}>{item}</li>
@@ -850,9 +998,9 @@ function App() {
                                     </ul>
                                   </div>
 
-                                  <div className="border border-red-500/30 rounded p-3 bg-red-500/5">
-                                    <p className="text-red-300 font-bold mb-2">단점</p>
-                                    <ul className="list-disc pl-5 text-gray-200 space-y-1">
+                                  <div className="border border-rose-200 rounded p-3 bg-rose-50">
+                                    <p className="text-rose-700 font-bold mb-2">단점</p>
+                                    <ul className="list-disc pl-5 text-slate-700 space-y-1">
                                       {(alt.cons || []).length === 0 && <li>-</li>}
                                       {(alt.cons || []).map((item, cIdx) => (
                                         <li key={`cons-${idx}-${cIdx}`}>{item}</li>
@@ -861,7 +1009,7 @@ function App() {
                                   </div>
                                 </div>
 
-                                {alt.reason && <p className="text-sm text-gray-300">이유: {alt.reason}</p>}
+                                {alt.reason && <p className="text-sm text-slate-800">이유: {alt.reason}</p>}
                               </article>
                             );
                           })}
@@ -874,31 +1022,31 @@ function App() {
                 {/* 레이어 탭 전용 카드 UI */}
                 {activeTab === 'layers' && (
                   <div className="not-prose space-y-6">
-                    <section className="space-y-3 border border-cyber-cyan-dim rounded-md p-4 bg-cyber-black/40">
-                      <p className="text-cyber-cyan-bright text-sm font-semibold">초보자 사고 구조화 레이어 맵</p>
+                    <section className="space-y-3 border border-slate-200 rounded-md p-4 bg-white">
+                      <p className="text-blue-600 text-sm font-semibold">초보자 사고 구조화 레이어 맵</p>
                       <div className="flex flex-wrap items-center gap-2 text-xs md:text-sm">
                         {layerCards.map((card, idx) => (
                           <React.Fragment key={`layer-flow-${card.id}`}>
-                            <span className="px-2.5 py-1 rounded border border-cyber-cyan text-cyber-cyan">{card.id}</span>
-                            {idx < layerCards.length - 1 && <span className="text-gray-500">→</span>}
+                            <span className="px-2.5 py-1 rounded border border-blue-300 text-blue-700">{card.id}</span>
+                            {idx < layerCards.length - 1 && <span className="text-slate-500">→</span>}
                           </React.Fragment>
                         ))}
                       </div>
                     </section>
 
                     {layerCards.length === 0 && (
-                      <p className="text-gray-300">레이어 데이터가 비어 있습니다. 먼저 변환을 실행해주세요.</p>
+                      <p className="text-slate-800">레이어 데이터가 비어 있습니다. 먼저 변환을 실행해주세요.</p>
                     )}
 
                     <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {layerCards.map((card) => (
-                        <article key={`layer-card-${card.id}`} className="border border-cyber-cyan-dim rounded-md p-4 bg-cyber-black/40 space-y-3">
+                        <article key={`layer-card-${card.id}`} className="border border-slate-200 rounded-md p-4 bg-white space-y-3">
                           <div className="flex items-center justify-between gap-3">
-                            <h3 className="text-cyber-cyan font-bold text-base">{card.title}</h3>
-                            <span className="text-[11px] px-2 py-1 rounded border border-cyber-cyan-dim text-cyber-cyan">{card.id}</span>
+                            <h3 className="text-blue-700 font-bold text-base">{card.title}</h3>
+                            <span className="text-[11px] px-2 py-1 rounded border border-slate-200 text-blue-700">{card.id}</span>
                           </div>
-                          <p className="text-gray-300 text-sm leading-relaxed">{card.goal}</p>
-                          <ul className="list-disc pl-5 text-gray-300 text-sm space-y-1">
+                          <p className="text-slate-800 text-sm leading-relaxed">{card.goal}</p>
+                          <ul className="list-disc pl-5 text-slate-800 text-sm space-y-1">
                             {(card.lines || []).map((line, idx) => (
                               <li key={`layer-line-${card.id}-${idx}`}>{line}</li>
                             ))}
@@ -912,39 +1060,39 @@ function App() {
                 {/* 용어 탭 전용 카드 UI */}
                 {activeTab === 'glossary' && (
                   <div className="not-prose space-y-6">
-                    <section className="space-y-3 border border-cyber-cyan-dim rounded-md p-4 bg-cyber-black/40">
-                      <p className="text-cyber-cyan-bright text-sm font-semibold">이 시스템의 핵심 개념 흐름</p>
+                    <section className="space-y-3 border border-slate-200 rounded-md p-4 bg-white">
+                      <p className="text-blue-600 text-sm font-semibold">이 시스템의 핵심 개념 흐름</p>
                       <div className="flex flex-wrap items-center gap-2 text-xs md:text-sm">
                         {FLOW_STAGES.map((stage, idx) => (
                           <React.Fragment key={stage}>
-                            <span className="px-2.5 py-1 rounded border border-cyber-cyan-dim text-cyber-cyan">{stage}</span>
-                            {idx < FLOW_STAGES.length - 1 && <span className="text-gray-500">→</span>}
+                            <span className="px-2.5 py-1 rounded border border-slate-200 text-blue-700">{stage}</span>
+                            {idx < FLOW_STAGES.length - 1 && <span className="text-slate-500">→</span>}
                           </React.Fragment>
                         ))}
                       </div>
                     </section>
 
                     <section className="flex items-center justify-between gap-3 flex-wrap">
-                      <h3 className="text-cyber-cyan font-bold text-lg">용어 네비게이터</h3>
-                      <div className="inline-flex border border-cyber-cyan-dim rounded overflow-hidden text-xs md:text-sm">
+                      <h3 className="text-blue-700 font-bold text-lg">용어 네비게이터</h3>
+                      <div className="inline-flex border border-slate-200 rounded overflow-hidden text-xs md:text-sm">
                         <button
                           type="button"
                           onClick={() => setGlossaryLevel('beginner')}
-                          className={`px-3 py-1.5 ${glossaryLevel === 'beginner' ? 'bg-cyber-cyan text-black' : 'text-cyber-cyan'}`}
+                          className={`px-3 py-1.5 ${glossaryLevel === 'beginner' ? 'bg-blue-600 text-white' : 'text-blue-700 bg-white'}`}
                         >
                           초급
                         </button>
                         <button
                           type="button"
                           onClick={() => setGlossaryLevel('practical')}
-                          className={`px-3 py-1.5 ${glossaryLevel === 'practical' ? 'bg-cyber-cyan text-black' : 'text-cyber-cyan'}`}
+                          className={`px-3 py-1.5 ${glossaryLevel === 'practical' ? 'bg-blue-600 text-white' : 'text-blue-700 bg-white'}`}
                         >
                           실무
                         </button>
                       </div>
                     </section>
 
-                    {glossaryItems.length === 0 && <p className="text-gray-300">용어사전이 비어 있습니다.</p>}
+                    {glossaryItems.length === 0 && <p className="text-slate-800">용어사전이 비어 있습니다.</p>}
 
                     <div className="space-y-4">
                       {glossaryItems.map((item, idx) => {
@@ -955,38 +1103,38 @@ function App() {
                             ref={(node) => {
                               glossaryCardRefs.current[item.id] = node;
                             }}
-                            className={`rounded-md border p-4 space-y-3 ${active ? 'border-cyber-cyan bg-cyber-cyan/10' : 'border-cyber-cyan-dim bg-cyber-black/40'}`}
+                            className={`rounded-md border p-4 space-y-3 ${active ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white'}`}
                           >
                             <div className="flex items-center justify-between gap-3 flex-wrap">
-                              <h4 className="text-cyber-cyan-bright font-bold text-base">
+                              <h4 className="text-blue-600 font-bold text-base">
                                 {idx + 1}. {item.term || '용어'}
                               </h4>
-                              <span className="text-xs px-2.5 py-1 rounded border border-cyber-cyan-dim text-cyber-cyan">{item.flow_stage}</span>
+                              <span className="text-xs px-2.5 py-1 rounded border border-slate-200 text-blue-700">{item.flow_stage}</span>
                             </div>
 
-                            <p className="text-gray-200 text-sm leading-relaxed">{item.simple || '-'}</p>
-                            <p className="text-gray-400 text-sm">비유: {item.analogy || '-'}</p>
-                            <p className="text-gray-400 text-sm">왜 중요한가: {item.why || '-'}</p>
+                            <p className="text-slate-700 text-sm leading-relaxed">{item.simple || '-'}</p>
+                            <p className="text-slate-600 text-sm">비유: {item.analogy || '-'}</p>
+                            <p className="text-slate-600 text-sm">왜 중요한가: {item.why || '-'}</p>
 
-                            <div className="rounded border border-yellow-500/40 bg-yellow-500/10 px-3 py-2">
-                              <p className="text-yellow-300 font-semibold text-sm">결정 포인트</p>
-                              <p className="text-yellow-100/90 text-sm">{item.decision_point || '-'}</p>
+                            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2">
+                              <p className="text-amber-700 font-semibold text-sm">결정 포인트</p>
+                              <p className="text-amber-800 text-sm">{item.decision_point || '-'}</p>
                             </div>
 
                             {glossaryLevel === 'beginner' && (
-                              <div className="rounded border border-cyber-cyan-dim bg-cyber-black/40 px-3 py-2 text-sm text-gray-300">
+                              <div className="rounded border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800">
                                 초급 가이드: {item.beginner_note || '-'}
                               </div>
                             )}
 
                             {glossaryLevel === 'practical' && (
                               <div className="space-y-2">
-                                <div className="rounded border border-cyber-cyan-dim bg-cyber-black/40 px-3 py-2 text-sm text-gray-300">
+                                <div className="rounded border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800">
                                   실무 가이드: {item.practical_note || '-'}
                                 </div>
-                                <div className="rounded border border-orange-500/40 bg-orange-500/10 px-3 py-2">
-                                  <p className="text-orange-300 font-semibold text-sm">실무에서 흔한 실수</p>
-                                  <ul className="list-disc pl-5 text-orange-100/90 text-sm space-y-1">
+                                <div className="rounded border border-orange-200 bg-orange-50 px-3 py-2">
+                                  <p className="text-orange-700 font-semibold text-sm">실무에서 흔한 실수</p>
+                                  <ul className="list-disc pl-5 text-orange-800 text-sm space-y-1">
                                     {(item.common_mistakes || []).length === 0 && <li>-</li>}
                                     {(item.common_mistakes || []).map((mistake, mIdx) => (
                                       <li key={`${item.id}-mistake-${mIdx}`}>{mistake}</li>
@@ -1000,14 +1148,14 @@ function App() {
                               <button
                                 type="button"
                                 onClick={() => handleGlossaryCardClick(item.id)}
-                                className="text-xs md:text-sm px-3 py-1.5 rounded border border-cyber-cyan text-cyber-cyan hover:bg-cyber-cyan/20"
+                                className="text-xs md:text-sm px-3 py-1.5 rounded border border-blue-300 text-blue-700 hover:bg-blue-100"
                               >
                                 본문에서 위치 보기
                               </button>
                               <button
                                 type="button"
                                 onClick={() => handleUseTemplate(item.request_template)}
-                                className="text-xs md:text-sm px-3 py-1.5 rounded border border-green-500/40 text-green-300 hover:bg-green-500/10"
+                                className="text-xs md:text-sm px-3 py-1.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
                               >
                                 🔧 이 개념 기준으로 수정 요청 만들기
                               </button>
@@ -1018,7 +1166,7 @@ function App() {
                     </div>
 
                     {termLocateMessage && (
-                      <p className="text-xs md:text-sm text-yellow-300 border border-yellow-500/40 bg-yellow-500/10 rounded px-3 py-2">
+                      <p className="text-xs md:text-sm text-amber-700 border border-amber-200 bg-amber-50 rounded px-3 py-2">
                         {termLocateMessage}
                       </p>
                     )}
@@ -1030,47 +1178,46 @@ function App() {
         </AnimatePresence>
       </section>
 
+      {/* 수강생용 GitHub 배너 */}
+      <a
+        href="https://github.com/dudcjfsp-cyber/Vibe-to-Spec-Transmuter.git"
+        target="_blank"
+        rel="noreferrer noopener"
+        className="mt-10 w-full max-w-5xl rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-5 py-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 hover:from-blue-100 hover:to-indigo-100 transition-colors"
+      >
+        <div className="flex flex-col gap-1">
+          <p className="text-sm font-semibold text-blue-800">제작자 GitHub 저장소 바로가기</p>
+          <p className="text-xs text-slate-600">코드 전체와 변경 이력을 확인하려면 저장소를 열어보세요.</p>
+        </div>
+        <div className="inline-flex items-center gap-2 text-sm font-semibold text-blue-700">
+          저장소 열기
+          <ExternalLink className="w-4 h-4" />
+        </div>
+      </a>
+
       {/* 설정 모달: API 키 입력/저장 */}
       <AnimatePresence>
         {isSettingsOpen && (
-          <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
-            <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => apiKey && setIsSettingsOpen(false)} className="absolute inset-0 bg-cyber-black/90 backdrop-blur-md" />
-            <Motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-md bg-[#0a0a0a] border border-cyber-cyan rounded-sm p-8 shadow-[0_0_50px_rgba(0,240,255,0.1)]">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => apiKey && setIsSettingsOpen(false)} className="absolute inset-0 bg-slate-900/30 backdrop-blur-md" />
+            <Motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-md bg-white border border-blue-200 rounded-xl p-8 shadow-xl">
               <div className="flex flex-col gap-6">
-                <div className="flex items-center justify-between border-b border-cyber-cyan-dim pb-4">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-4">
                   <div className="flex items-center gap-2">
-                    <Key className="w-5 h-5 text-cyber-cyan" />
-                    <h2 className="text-lg font-bold text-cyber-cyan tracking-widest uppercase">Neural Settings</h2>
+                    <Key className="w-5 h-5 text-blue-700" />
+                    <h2 className="text-lg font-bold text-blue-700">API 키 설정</h2>
                   </div>
-                  {apiKey && <button onClick={() => setIsSettingsOpen(false)} className="text-gray-500 hover:text-white transition-colors"><X className="w-5 h-5" /></button>}
+                  {apiKey && <button onClick={() => setIsSettingsOpen(false)} className="text-slate-500 hover:text-slate-900 transition-colors"><X className="w-5 h-5" /></button>}
                 </div>
 
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <label className="text-[10px] text-cyber-cyan uppercase font-bold tracking-widest opacity-70">Gemini API Key</label>
-                    <input type="password" value={tempKey} onChange={(e) => setTempKey(e.target.value)} placeholder={apiKey ? '기존 키가 저장되어 있습니다...' : '발급받은 API 키를 입력하세요...'} className="w-full bg-cyber-black/50 border border-cyber-cyan-dim p-4 outline-none focus:border-cyber-cyan text-cyber-cyan transition-all font-mono" />
-                    <p className="text-[10px] text-gray-500 leading-relaxed italic">* 기본 저장은 세션(sessionStorage)입니다. 탭을 닫으면 키가 사라집니다.</p>
+                    <label className="text-[11px] text-blue-700 font-bold opacity-80">Gemini API Key</label>
+                    <input type="password" value={tempKey} onChange={(e) => setTempKey(e.target.value)} placeholder={apiKey ? '기존 키가 저장되어 있습니다...' : '발급받은 API 키를 입력하세요...'} className="w-full bg-slate-50 border border-slate-200 p-4 outline-none focus:border-blue-300 text-blue-700 transition-all font-sans" />
+                    <p className="text-[10px] text-slate-500 leading-relaxed italic">* API 키는 sessionStorage에만 저장되며, 마지막 저장/사용 후 30분이 지나면 자동 만료됩니다.</p>
                   </div>
 
-                  <label className="flex items-center gap-2 text-xs text-gray-400">
-                    <input
-                      type="checkbox"
-                      checked={rememberThisDevice}
-                      onChange={(e) => {
-                        const next = e.target.checked;
-                        setRememberThisDevice(next);
-                        if (!next) {
-                          localStorage.removeItem(API_KEY_STORAGE_KEY);
-                        } else if (apiKey) {
-                          localStorage.setItem(API_KEY_STORAGE_KEY, apiKey);
-                        }
-                      }}
-                      className="accent-cyan-400"
-                    />
-                    이 기기에서 기억하기 (localStorage)
-                  </label>
-
-                  <button onClick={handleSaveKey} disabled={!tempKey.trim()} className="w-full py-4 bg-cyber-cyan-dim hover:bg-cyber-cyan text-cyber-cyan hover:text-cyber-black font-bold uppercase tracking-widest transition-all duration-300 border border-cyber-cyan disabled:opacity-30 disabled:cursor-not-allowed">Save & Synchronize</button>
+                  <button onClick={handleSaveKey} disabled={!tempKey.trim()} className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-all duration-200 border border-blue-700 disabled:opacity-30 disabled:cursor-not-allowed">저장하고 시작하기</button>
                 </div>
               </div>
             </Motion.div>
@@ -1079,13 +1226,14 @@ function App() {
       </AnimatePresence>
 
       {/* 하단 푸터 */}
-      <footer className="mt-20 w-full max-w-4xl border-t border-cyber-cyan-dim/20 pt-8 flex flex-col md:flex-row justify-between items-center text-[10px] text-cyber-cyan/30 gap-4">
-        <p>ⓒ 2026 ANTIGRAVITY SYSTEMS. ALL RIGHTS RESERVED.</p>
-        <div className="flex gap-6"><span>ENCRYPTION: AES-256</span><span>PROTOCOL: GEMINI-CLIENT-DIRECT</span></div>
+      <footer className="mt-16 w-full max-w-5xl border-t border-slate-200 pt-6 flex flex-col md:flex-row justify-between items-center text-[11px] text-slate-500 gap-4">
+        <p>인텔 AI 앱 크리에이터 양성과정 · 사고 구조화 보조 도구</p>
+        <div className="flex gap-6"><span>학습 중심 UI</span><span>비전공자 친화 설계</span></div>
       </footer>
     </main>
   );
 }
 
 export default App;
+
 

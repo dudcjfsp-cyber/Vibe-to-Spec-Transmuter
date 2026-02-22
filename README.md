@@ -1,49 +1,96 @@
 # Vibe-to-Spec Transmuter
 
-[English](README.md) | [Korean](README.ko.md)
+[English](README.md) | [한국어](README.ko.md)
 
-Vibe-to-Spec Transmuter is an educational MVP that converts abstract user intent ("vibe") into implementation-ready technical specs.
+Vibe-to-Spec Transmuter is an educational assistant that helps non-developers and beginner vibe coders turn vague ideas into structured implementation specs.
 
-## Goals
-- Help non-developers understand engineering thinking.
-- Give developers a spec they can implement with minimal clarification.
-- Help users turn feedback into concrete change requests.
+This project is being built for the **Intel AI App Creator training program** (beginner-friendly, non-CS audience).
 
-## Current Features
-- Gemini-based spec generation engine.
-  - JSON-only output contract.
-  - One automatic retry when JSON parsing fails.
-- Layered output format (L1 / L2 / L3).
-  - L1 Thinking: interpretation, assumptions, uncertainties, alternatives.
-  - L2 Translation: non-dev and dev spec artifacts.
-  - L3 Execution: implementation options and master prompt.
-- Learning mode toggle (ON/OFF).
-- Tab UI:
-  - Non-dev / Dev / Thinking / Glossary
-- Glossary navigator upgrades:
-  - Concept flow map: `Webhook -> Parsing -> Data Sync -> Source of Truth`
-  - Difficulty toggle: Beginner / Practical
-  - Decision point, practical mistakes, request template per term
-  - Glossary-to-content and content-to-glossary navigation
-  - In-content term highlighting and focus behavior
-- Copy actions:
-  - Copy dev spec
-  - Copy master prompt
+## What It Does
 
-## API Key Storage Policy
-- Default: `sessionStorage`
-- Optional: "Remember on this device" uses `localStorage`
-- Unchecking removes key from `localStorage` immediately
+1. User writes a rough idea in plain language.
+2. The app converts it into a structured spec format.
+3. User reviews outputs by audience and purpose:
+   - Non-dev view
+   - Dev view
+   - Thinking view
+   - Layer view
+   - Glossary view
+
+## Current UI/UX (as of current code)
+
+- Beginner-focused light UI (no cyberpunk/neon theme).
+- 3-step progress hints:
+  - Problem input
+  - Structured generation
+  - Review and revise
+- Learning mode clearly separated:
+  - `ON`: enables Thinking tab (assumptions/questions/alternatives)
+  - `OFF`: disables Thinking tab and focuses on quick practical outputs
+- Copy actions now have explicit purpose:
+  - `Antigravity Prompt Copy`: paste into Antigravity for code generation
+  - `Dev Handoff Spec Copy`: share with human developers/teams
+- Footer area includes an external banner link to the creator repository.
+
+## Output Structure
+
+The app normalizes model output into a fixed schema and generates:
+
+- `standard_output` (normalized JSON spec)
+- `artifacts.nondev_spec_md`
+- `artifacts.dev_spec_md`
+- `artifacts.master_prompt`
+- `layers.L1_thinking`
+- `glossary` (beginner/practical support)
+
+## Model Selection Strategy
+
+Model selection is **not single hard-coded runtime usage**.
+
+- The app queries available Gemini models.
+- It filters models that support `generateContent`.
+- It picks by preference order first, then falls back:
+  - Preference order: `gemini-1.5-flash` -> `gemini-1.5-pro` -> `gemini-1.0-pro` -> `gemini-pro`
+  - Fallback list is used if lookup fails.
+
+See `src/lib/gemini.js`.
+
+## API Key Policy (Current)
+
+API key handling was tightened to reduce browser-side exposure risk:
+
+- Storage: **sessionStorage only**
+- TTL: **30 minutes** after last save/use
+- Auto-expire: key is cleared and user is prompted again
+- Legacy cleanup: old localStorage key is removed on app start
+- Local persistence option has been removed
+
+See `src/App.jsx` for exact logic.
+
+## Security Note (Important)
+
+This app still uses a **client-direct AI call architecture** for educational MVP speed.
+
+That means:
+- API key is handled in the browser session.
+- Full protection against DevTools-level exposure is not possible in this architecture.
+
+For production-grade security, migrate to:
+- server-side proxy
+- server-held API key
+- rate limiting + auth + audit controls
 
 ## Tech Stack
+
 - React 19
 - Vite 7
 - Tailwind CSS 4
 - Framer Motion
 - `@google/generative-ai`
-- React Markdown
+- React Markdown + `remark-gfm`
 
-## Local Run
+## Local Development
+
 ```bash
 npm install
 npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
@@ -52,27 +99,33 @@ npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 Open:
 - `http://127.0.0.1:5173`
 
-## Lint
+## Scripts
+
 ```bash
+npm run dev
+npm run build
 npm run lint
+npm run preview
 ```
 
 ## Deployment
-GitHub Pages auto deployment is enabled.
+
+GitHub Pages deployment is configured:
 
 - Workflow: `.github/workflows/deploy.yml`
 - Trigger: push to `main`
-- Publish: `dist` to `gh-pages`
+- Publish dir: `dist`
 
 ## Project Structure
+
 ```text
 src/
-  App.jsx           # UI, state, tabs, glossary navigation
-  lib/gemini.js     # model calls, JSON schema enforcement, parse/retry
-  index.css         # theme and styling
+  App.jsx         # Main UI, tabs, interaction, API key session policy
+  lib/gemini.js   # Model calls, schema normalization, retry logic
+  index.css       # Theme and markdown/table readability styles
+  main.jsx        # React entry point
 ```
 
-## Notes
-- Current architecture is client-direct model invocation, suitable for MVP and education use.
-- For stronger production security, migrate to a server-side proxy architecture.
-- If local access drops intermittently, the usual causes are dev server process termination or endpoint protection blocking local port binding.
+## Status
+
+Active educational MVP under iterative UI and workflow refinement.
