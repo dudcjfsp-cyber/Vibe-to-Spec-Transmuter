@@ -12,15 +12,22 @@ import { motion as Motion, AnimatePresence } from 'framer-motion';
 import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert, Settings, X, Key, Brain, BookOpen, Code, User, Layers3, ExternalLink, Compass } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { transmuteVibeToSpec, recommendHybridStacks, fetchAvailableModels } from './lib/gemini';
+import {
+  transmuteVibeToSpec,
+  recommendHybridStacks,
+  fetchAvailableModels,
+  SUPPORTED_MODEL_PROVIDERS,
+  getProviderDisplayName,
+} from './lib/gemini';
 
 // -------------------------------------------------------
 // 전역 상수
 // -------------------------------------------------------
-// API 키를 브라우저 저장소에 넣을 때 사용할 키 이름입니다.
-const API_KEY_STORAGE_KEY = 'gemini_api_key';
-// API 키 저장 시각(ms)을 저장할 키 이름입니다.
-const API_KEY_SAVED_AT_STORAGE_KEY = 'gemini_api_key_saved_at';
+const API_PROVIDER_STORAGE_KEY = 'ai_provider';
+const API_KEY_STORAGE_PREFIX = 'ai_api_key';
+const API_KEY_SAVED_AT_STORAGE_PREFIX = 'ai_api_key_saved_at';
+const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
+const LEGACY_API_KEY_SAVED_AT_STORAGE_KEY = 'gemini_api_key_saved_at';
 // API 키의 세션 유효시간(30분)입니다.
 const API_KEY_TTL_MS = 30 * 60 * 1000;
 // "복사 완료" 표시가 유지되는 시간(ms)입니다.
@@ -37,6 +44,10 @@ const TECH_GUIDE_WEIGHTS = {
   cost: 35,
   scalability: 20,
 };
+const PROVIDER_OPTIONS = SUPPORTED_MODEL_PROVIDERS.map((providerId) => ({
+  id: providerId,
+  label: getProviderDisplayName(providerId),
+}));
 
 // 결과 패널 상단 탭 목록입니다.
 const TABS = [
@@ -231,15 +242,42 @@ function isContentTab(tabId) {
   return CONTENT_TAB_IDS.includes(tabId);
 }
 
+function normalizeProvider(provider) {
+  const normalized = String(provider || '').trim().toLowerCase();
+  return SUPPORTED_MODEL_PROVIDERS.includes(normalized) ? normalized : SUPPORTED_MODEL_PROVIDERS[0];
+}
+
+function getApiKeyStorageKey(provider) {
+  return `${API_KEY_STORAGE_PREFIX}_${normalizeProvider(provider)}`;
+}
+
+function getApiKeySavedAtStorageKey(provider) {
+  return `${API_KEY_SAVED_AT_STORAGE_PREFIX}_${normalizeProvider(provider)}`;
+}
+
+function getStoredProvider() {
+  return normalizeProvider(sessionStorage.getItem(API_PROVIDER_STORAGE_KEY) || SUPPORTED_MODEL_PROVIDERS[0]);
+}
+
+function persistProviderToSession(provider) {
+  sessionStorage.setItem(API_PROVIDER_STORAGE_KEY, normalizeProvider(provider));
+}
+
+function clearLegacyGeminiStorage() {
+  sessionStorage.removeItem(LEGACY_API_KEY_STORAGE_KEY);
+  sessionStorage.removeItem(LEGACY_API_KEY_SAVED_AT_STORAGE_KEY);
+  localStorage.removeItem(LEGACY_API_KEY_STORAGE_KEY);
+}
+
 /**
  * API 키 저장소를 비웁니다.
- * - 현재 세션 키 삭제
- * - 과거 버전에서 남았을 수 있는 localStorage 키도 함께 삭제
  */
-function clearStoredApiKey() {
-  sessionStorage.removeItem(API_KEY_STORAGE_KEY);
-  sessionStorage.removeItem(API_KEY_SAVED_AT_STORAGE_KEY);
-  localStorage.removeItem(API_KEY_STORAGE_KEY);
+function clearStoredApiKey(provider) {
+  const storageKey = getApiKeyStorageKey(provider);
+  const savedAtKey = getApiKeySavedAtStorageKey(provider);
+  sessionStorage.removeItem(storageKey);
+  sessionStorage.removeItem(savedAtKey);
+  localStorage.removeItem(storageKey);
 }
 
 /**
@@ -251,13 +289,14 @@ function isApiKeyExpired(savedAtMs) {
 
 /**
  * API 키를 세션 저장소에 저장합니다.
- * 저장 시각도 함께 기록해 TTL(30분)을 계산할 수 있게 합니다.
  */
-function persistApiKeyToSession(key) {
-  sessionStorage.setItem(API_KEY_STORAGE_KEY, key);
-  sessionStorage.setItem(API_KEY_SAVED_AT_STORAGE_KEY, String(Date.now()));
-  // 과거 버전에서 남은 localStorage 키는 즉시 제거합니다.
-  localStorage.removeItem(API_KEY_STORAGE_KEY);
+function persistApiKeyToSession(key, provider) {
+  const storageKey = getApiKeyStorageKey(provider);
+  const savedAtKey = getApiKeySavedAtStorageKey(provider);
+  sessionStorage.setItem(storageKey, key);
+  sessionStorage.setItem(savedAtKey, String(Date.now()));
+  localStorage.removeItem(storageKey);
+  if (normalizeProvider(provider) === 'gemini') clearLegacyGeminiStorage();
 }
 
 /**
@@ -266,20 +305,33 @@ function persistApiKeyToSession(key) {
  * - sessionStorage만 사용
  * - 30분 TTL이 지나면 자동 무효화
  */
-function getStoredApiKey() {
-  const key = sessionStorage.getItem(API_KEY_STORAGE_KEY) || '';
-  const savedAtMs = Number(sessionStorage.getItem(API_KEY_SAVED_AT_STORAGE_KEY));
+function getStoredApiKey(provider) {
+  const normalizedProvider = normalizeProvider(provider);
+  const storageKey = getApiKeyStorageKey(normalizedProvider);
+  const savedAtKey = getApiKeySavedAtStorageKey(normalizedProvider);
 
-  // 과거 버전(localStorage 저장) 데이터는 앱 시작 시 정리합니다.
-  localStorage.removeItem(API_KEY_STORAGE_KEY);
+  let key = sessionStorage.getItem(storageKey) || '';
+  let savedAtMs = Number(sessionStorage.getItem(savedAtKey));
+
+  // 과거 버전의 Gemini 키를 현재 구조로 1회 이관합니다.
+  if (!key && normalizedProvider === 'gemini') {
+    const legacyKey = sessionStorage.getItem(LEGACY_API_KEY_STORAGE_KEY) || localStorage.getItem(LEGACY_API_KEY_STORAGE_KEY) || '';
+    const legacySavedAt = Number(sessionStorage.getItem(LEGACY_API_KEY_SAVED_AT_STORAGE_KEY));
+    if (legacyKey) {
+      sessionStorage.setItem(storageKey, legacyKey);
+      sessionStorage.setItem(savedAtKey, Number.isFinite(legacySavedAt) ? String(legacySavedAt) : String(Date.now()));
+      key = legacyKey;
+      savedAtMs = Number(sessionStorage.getItem(savedAtKey));
+    }
+  }
 
   if (!key) {
-    sessionStorage.removeItem(API_KEY_SAVED_AT_STORAGE_KEY);
+    sessionStorage.removeItem(savedAtKey);
     return '';
   }
 
   if (isApiKeyExpired(savedAtMs)) {
-    clearStoredApiKey();
+    clearStoredApiKey(normalizedProvider);
     return '';
   }
 
@@ -742,8 +794,9 @@ function App() {
   const [hybridStackGuideStatus, setHybridStackGuideStatus] = useState('idle');
 
   // API 키 설정 모달 관련 상태
-  const [apiKey, setApiKey] = useState(getStoredApiKey);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(!getStoredApiKey());
+  const [apiProvider, setApiProvider] = useState(getStoredProvider);
+  const [apiKey, setApiKey] = useState(() => getStoredApiKey(getStoredProvider()));
+  const [isSettingsOpen, setIsSettingsOpen] = useState(() => !getStoredApiKey(getStoredProvider()));
   const [tempKey, setTempKey] = useState('');
 
   // DOM 참조(ref): 자동 높이 조절, 스크롤 이동, 용어 카드 포커스
@@ -910,6 +963,7 @@ function App() {
     () => getHybridStackStatusMeta(hybridStackGuideStatus),
     [hybridStackGuideStatus],
   );
+  const isProviderSelectorDisabled = status === 'processing';
   const isModelSelectorDisabled = !apiKey || status === 'processing' || isModelOptionsLoading || modelOptions.length === 0;
 
   // 현재 탭에 맞는 본문 마크다운 선택기
@@ -948,7 +1002,7 @@ function App() {
 
     setIsModelOptionsLoading(true);
     try {
-      const fetchedModels = await fetchAvailableModels(nextApiKey);
+      const fetchedModels = await fetchAvailableModels(nextApiKey, { provider: apiProvider });
       const uniqueModels = Array.from(new Set(
         (Array.isArray(fetchedModels) ? fetchedModels : [])
           .map((item) => String(item || '').trim())
@@ -966,7 +1020,7 @@ function App() {
     } finally {
       setIsModelOptionsLoading(false);
     }
-  }, []);
+  }, [apiProvider]);
 
   // 텍스트 입력창 높이 자동 확장
   // 예시: 입력 줄이 늘어나면 textarea 높이도 함께 커집니다.
@@ -976,10 +1030,22 @@ function App() {
     textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
   }, [vibe]);
 
-  // 과거 버전에서 localStorage에 남은 키를 앱 시작 시 정리합니다.
+  // 과거 버전에서 남은 Gemini 고정 키를 앱 시작 시 정리합니다.
   useEffect(() => {
-    localStorage.removeItem(API_KEY_STORAGE_KEY);
+    clearLegacyGeminiStorage();
   }, []);
+
+  // 제공자 선택값을 세션에 저장하고, 해당 제공자의 키를 자동 로드합니다.
+  useEffect(() => {
+    persistProviderToSession(apiProvider);
+    const restoredKey = getStoredApiKey(apiProvider);
+    setApiKey(restoredKey);
+    setTempKey('');
+    setActiveModel('OFFLINE');
+    setModelOptions([]);
+    setSelectedModel('');
+    if (!restoredKey) setIsSettingsOpen(true);
+  }, [apiProvider]);
 
   // API 키가 준비되면 사용 가능한 모델 후보군을 로드합니다.
   useEffect(() => {
@@ -997,9 +1063,9 @@ function App() {
   useEffect(() => {
     if (!apiKey) return;
 
-    const savedAtMs = Number(sessionStorage.getItem(API_KEY_SAVED_AT_STORAGE_KEY));
+    const savedAtMs = Number(sessionStorage.getItem(getApiKeySavedAtStorageKey(apiProvider)));
     if (isApiKeyExpired(savedAtMs)) {
-      clearStoredApiKey();
+      clearStoredApiKey(apiProvider);
       setApiKey('');
       setActiveModel('OFFLINE');
       setIsSettingsOpen(true);
@@ -1008,14 +1074,14 @@ function App() {
 
     const remainingMs = API_KEY_TTL_MS - (Date.now() - savedAtMs);
     const timerId = window.setTimeout(() => {
-      clearStoredApiKey();
+      clearStoredApiKey(apiProvider);
       setApiKey('');
       setActiveModel('OFFLINE');
       setIsSettingsOpen(true);
     }, remainingMs);
 
     return () => window.clearTimeout(timerId);
-  }, [apiKey]);
+  }, [apiKey, apiProvider]);
 
   // 용어 탭/레이어 탭이 아닐 때 마지막 본문 탭을 기억합니다.
   // 이유: 용어에서 "본문으로 돌아가기"할 때 직전 위치를 복원하기 위함입니다.
@@ -1075,7 +1141,7 @@ function App() {
     const key = tempKey.trim();
     if (!key) return;
 
-    persistApiKeyToSession(key);
+    persistApiKeyToSession(key, apiProvider);
 
     setApiKey(key);
     setIsSettingsOpen(false);
@@ -1092,14 +1158,17 @@ function App() {
 
     setHybridStackGuideStatus('loading');
     try {
-      const guide = await recommendHybridStacks(nextVibe, standardPayload, apiKey, { modelName: selectedModel });
+      const guide = await recommendHybridStacks(nextVibe, standardPayload, apiKey, {
+        provider: apiProvider,
+        modelName: selectedModel,
+      });
       setHybridStackGuide(guide);
       setHybridStackGuideStatus('success');
     } catch {
       setHybridStackGuide(null);
       setHybridStackGuideStatus('error');
     }
-  }, [apiKey, selectedModel]);
+  }, [apiKey, apiProvider, selectedModel]);
 
   /**
    * 기술 선택 탭에서 "스택 후보 다시 추천"을 눌렀을 때 재요청합니다.
@@ -1123,9 +1192,9 @@ function App() {
 
     // 실행 직전에 TTL 만료 여부를 다시 점검합니다.
     // (앱이 켜진 뒤 시간이 지난 경우를 대비)
-    const savedAtMs = Number(sessionStorage.getItem(API_KEY_SAVED_AT_STORAGE_KEY));
+    const savedAtMs = Number(sessionStorage.getItem(getApiKeySavedAtStorageKey(apiProvider)));
     if (isApiKeyExpired(savedAtMs)) {
-      clearStoredApiKey();
+      clearStoredApiKey(apiProvider);
       setApiKey('');
       setActiveModel('OFFLINE');
       setIsSettingsOpen(true);
@@ -1133,7 +1202,7 @@ function App() {
     }
 
     // 사용 중인 키는 만료 시각을 갱신해 세션 사용성을 유지합니다.
-    persistApiKeyToSession(apiKey);
+    persistApiKeyToSession(apiKey, apiProvider);
 
     setStatus('processing');
     setResult(null);
@@ -1141,7 +1210,11 @@ function App() {
     setHybridStackGuideStatus('idle');
 
     try {
-      const generated = await transmuteVibeToSpec(vibe, apiKey, { showThinking, modelName: selectedModel });
+      const generated = await transmuteVibeToSpec(vibe, apiKey, {
+        provider: apiProvider,
+        showThinking,
+        modelName: selectedModel,
+      });
       setResult(generated);
       const usedModel = generated.model || selectedModel || activeModel;
       setActiveModel(String(usedModel || activeModel).toUpperCase());
@@ -1380,52 +1453,77 @@ function App() {
   return (
     <main className="min-h-screen bg-gradient-to-b from-blue-50 via-white to-slate-100 flex flex-col items-center justify-start p-4 md:p-8 font-sans text-slate-800">
       {/* 상단 헤더: 앱 제목, 현재 모델, 학습모드 토글, 설정 버튼 */}
-      <header className="w-full max-w-5xl mb-8 flex items-center justify-between border border-slate-200 rounded-xl px-4 py-4 md:px-6 bg-white/90 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-blue-100 rounded-lg">
-            <Cpu className="w-6 h-6 text-blue-700" />
+      <header className="w-full max-w-5xl mb-8 border border-slate-200 rounded-xl px-4 py-4 md:px-6 bg-white/90 shadow-sm">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2 bg-blue-100 rounded-lg">
+                <Cpu className="w-6 h-6 text-blue-700" />
+              </div>
+              <div className="space-y-1 min-w-0">
+                <h1 className="text-xl md:text-2xl font-bold tracking-tight text-blue-700">사고 구조화 도우미</h1>
+                <p className="text-xs md:text-sm text-slate-500">비전공자와 바이브코딩 초보자를 위한 요구사항 정리 도구</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4 shrink-0">
+              <div className="hidden md:flex items-center gap-2">
+                <div className="flex items-center gap-2 text-[11px] text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-md">
+                  <label htmlFor="provider-selector" className="whitespace-nowrap">제공자:</label>
+                  <select
+                    id="provider-selector"
+                    value={apiProvider}
+                    onChange={(e) => setApiProvider(e.target.value)}
+                    disabled={isProviderSelectorDisabled}
+                    className="bg-white border border-blue-200 rounded px-2 py-1 text-[11px] text-blue-700 outline-none focus:border-blue-400 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title="사용할 AI 제공자 선택"
+                  >
+                    {PROVIDER_OPTIONS.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {/* 모델 선택 드롭다운:
+                    - API 키로 조회한 후보군을 보여줍니다.
+                    - 여기서 고른 모델은 구조화 생성 + 하이브리드 스택 추천 둘 다에 반영됩니다. */}
+                <div className="flex items-center gap-2 text-[11px] text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-md">
+                  <Terminal className="w-3 h-3" />
+                  <label htmlFor="model-selector" className="whitespace-nowrap">사용 모델:</label>
+                  <select
+                    id="model-selector"
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    disabled={isModelSelectorDisabled}
+                    className="bg-white border border-blue-200 rounded px-2 py-1 text-[11px] text-blue-700 outline-none focus:border-blue-400 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title="사용 가능한 모델 후보군에서 선택"
+                  >
+                    {isModelOptionsLoading && <option value="">모델 목록 로딩 중...</option>}
+                    {!isModelOptionsLoading && modelOptions.length === 0 && <option value="">{activeModel}</option>}
+                    {modelOptions.map((modelName) => (
+                      <option key={modelName} value={modelName}>
+                        {modelName.toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-blue-50 rounded-lg transition-colors text-blue-700">
+                <Settings className="w-5 h-5" />
+              </button>
+            </div>
           </div>
-          <div className="space-y-1">
-            <h1 className="text-xl md:text-2xl font-bold tracking-tight text-blue-700">사고 구조화 도우미</h1>
-            <p className="text-xs md:text-sm text-slate-500">비전공자와 바이브코딩 초보자를 위한 요구사항 정리 도구</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          {/* 모델 선택 드롭다운:
-              - API 키로 조회한 후보군을 보여줍니다.
-              - 여기서 고른 모델은 구조화 생성 + 하이브리드 스택 추천 둘 다에 반영됩니다. */}
-          <div className="hidden md:flex items-center gap-2 text-[11px] text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-md">
-            <Terminal className="w-3 h-3" />
-            <label htmlFor="model-selector" className="whitespace-nowrap">사용 모델:</label>
-            <select
-              id="model-selector"
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              disabled={isModelSelectorDisabled}
-              className="bg-white border border-blue-200 rounded px-2 py-1 text-[11px] text-blue-700 outline-none focus:border-blue-400 disabled:opacity-60 disabled:cursor-not-allowed"
-              title="사용 가능한 모델 후보군에서 선택"
+          <div className="flex justify-end">
+            <button
+              onClick={() => setShowThinking((v) => !v)}
+              className={`px-4 py-2.5 text-sm border rounded-lg transition-colors whitespace-nowrap shrink-0 ${showThinking
+                ? 'border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100'
+                : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+                }`}
             >
-              {isModelOptionsLoading && <option value="">모델 목록 로딩 중...</option>}
-              {!isModelOptionsLoading && modelOptions.length === 0 && <option value="">{activeModel}</option>}
-              {modelOptions.map((modelName) => (
-                <option key={modelName} value={modelName}>
-                  {modelName.toUpperCase()}
-                </option>
-              ))}
-            </select>
+              학습 모드: {showThinking ? 'ON (사고 포함)' : 'OFF (빠른 확인)'}
+            </button>
           </div>
-          <button
-            onClick={() => setShowThinking((v) => !v)}
-            className={`px-4 py-2.5 text-sm border rounded-lg transition-colors ${showThinking
-              ? 'border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100'
-              : 'border-slate-300 text-slate-700 hover:bg-slate-50'
-              }`}
-          >
-            학습 모드: {showThinking ? 'ON (사고 포함)' : 'OFF (빠른 확인)'}
-          </button>
-          <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-blue-50 rounded-lg transition-colors text-blue-700">
-            <Settings className="w-5 h-5" />
-          </button>
         </div>
       </header>
 
@@ -2101,8 +2199,24 @@ function App() {
 
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <label className="text-[11px] text-blue-700 font-bold opacity-80">Gemini API Key</label>
-                    <input type="password" value={tempKey} onChange={(e) => setTempKey(e.target.value)} placeholder={apiKey ? '기존 키가 저장되어 있습니다...' : '발급받은 API 키를 입력하세요...'} className="w-full bg-slate-50 border border-slate-200 p-4 outline-none focus:border-blue-300 text-blue-700 transition-all font-sans" />
+                    <label htmlFor="settings-provider" className="text-[11px] text-blue-700 font-bold opacity-80">AI 제공자</label>
+                    <select
+                      id="settings-provider"
+                      value={apiProvider}
+                      onChange={(e) => setApiProvider(e.target.value)}
+                      disabled={status === 'processing'}
+                      className="w-full bg-slate-50 border border-slate-200 p-3.5 outline-none focus:border-blue-300 text-blue-700 transition-all font-sans rounded-md"
+                    >
+                      {PROVIDER_OPTIONS.map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[11px] text-blue-700 font-bold opacity-80">{getProviderDisplayName(apiProvider)} API Key</label>
+                    <input type="password" value={tempKey} onChange={(e) => setTempKey(e.target.value)} placeholder={apiKey ? `기존 ${getProviderDisplayName(apiProvider)} 키가 저장되어 있습니다...` : `${getProviderDisplayName(apiProvider)}에서 발급받은 API 키를 입력하세요...`} className="w-full bg-slate-50 border border-slate-200 p-4 outline-none focus:border-blue-300 text-blue-700 transition-all font-sans" />
                     <p className="text-[10px] text-slate-500 leading-relaxed italic">* API 키는 sessionStorage에만 저장되며, 마지막 저장/사용 후 30분이 지나면 자동 만료됩니다.</p>
                   </div>
 
