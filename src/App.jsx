@@ -3,16 +3,16 @@
  * App.jsx 읽기 가이드(비전공자용)
  * 1) 입력창에 요구사항을 적습니다.
  * 2) "사고 구조화 시작"을 누르면 AI가 표준 형식으로 정리합니다.
- * 3) 탭(비전공자/개발자/사고/레이어/용어)에서 결과를 확인합니다.
+ * 3) 탭(비전공자/개발자/기술 선택/사고/레이어/용어)에서 결과를 확인합니다.
  *
  * 이 파일은 "화면(UI) + 화면에서 쓰는 상태 관리"를 담당합니다.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion as Motion, AnimatePresence } from 'framer-motion';
-import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert, Settings, X, Key, Brain, BookOpen, Code, User, Layers3, ExternalLink } from 'lucide-react';
+import { Zap, Copy, Check, Terminal, Cpu, ShieldAlert, Settings, X, Key, Brain, BookOpen, Code, User, Layers3, ExternalLink, Compass } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { transmuteVibeToSpec } from './lib/gemini';
+import { transmuteVibeToSpec, recommendHybridStacks, fetchAvailableModels } from './lib/gemini';
 
 // -------------------------------------------------------
 // 전역 상수
@@ -29,14 +29,190 @@ const CLIPBOARD_RESET_MS = 2000;
 const FLOW_STAGES = ['Webhook', 'Parsing', 'Data Sync', 'Source of Truth'];
 // 용어 클릭 후 본문 강조 효과가 유지되는 시간(ms)입니다.
 const FOCUS_HIGHLIGHT_MS = 2200;
+// 기술 선택 탭 ID입니다.
+const TECH_GUIDE_TAB_ID = 'tech_choice';
+// 기술 선택 점수 가중치입니다. (난이도/비용/확장성)
+const TECH_GUIDE_WEIGHTS = {
+  difficulty: 45,
+  cost: 35,
+  scalability: 20,
+};
 
 // 결과 패널 상단 탭 목록입니다.
 const TABS = [
   { id: 'nondev', label: '비전공자', icon: User },
   { id: 'dev', label: '개발자', icon: Code },
+  { id: TECH_GUIDE_TAB_ID, label: '기술 선택', icon: Compass },
   { id: 'thinking', label: '사고', icon: Brain },
   { id: 'layers', label: '레이어', icon: Layers3 },
   { id: 'glossary', label: '용어', icon: BookOpen },
+];
+const PROMPT_SPEC_TAB_ID = 'prompt_spec';
+const QUICK_ACTION_BUTTONS = [
+  { id: 'prompt', label: '프롬프트', icon: Zap },
+  { id: 'spec', label: '개발 스펙', icon: Copy },
+];
+const GUIDE_TONE_CLASS_MAP = {
+  amber: 'border-amber-200 bg-amber-50 text-amber-800',
+  blue: 'border-blue-200 bg-blue-50 text-blue-800',
+  emerald: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+  slate: 'border-slate-200 bg-slate-50 text-slate-700',
+};
+const CONFIDENCE_BADGE_CLASS_MAP = {
+  높음: 'border-emerald-200 text-emerald-700 bg-emerald-50',
+  중간: 'border-amber-200 text-amber-700 bg-amber-50',
+  default: 'border-slate-200 text-slate-600 bg-slate-50',
+};
+const HYBRID_STACK_STATUS_META = {
+  success: {
+    className: 'border-emerald-200 text-emerald-700 bg-emerald-50',
+    label: '완료',
+  },
+  loading: {
+    className: 'border-amber-200 text-amber-700 bg-amber-50',
+    label: '생성 중',
+  },
+  error: {
+    className: 'border-rose-200 text-rose-700 bg-rose-50',
+    label: '실패(재시도 가능)',
+  },
+  default: {
+    className: 'border-slate-200 text-slate-600 bg-slate-50',
+    label: '대기',
+  },
+};
+const PROJECT_PROFILE_QUESTIONS = [
+  { id: 'budget', label: '예산', question: '초기/월 예산은 어느 정도인가?' },
+  { id: 'timeline', label: '기간', question: '언제까지 첫 동작 버전을 보여줘야 하는가?' },
+  { id: 'team', label: '팀 역량', question: '현재 구현 가능한 개발 역량은 어느 정도인가?' },
+  { id: 'users', label: '예상 사용자 수', question: '초기 사용자 규모는 어느 정도인가?' },
+  { id: 'dataSensitivity', label: '데이터 민감도', question: '개인정보/결제/의료 등 민감 데이터가 포함되는가?' },
+];
+const PROFILE_VALUE_LABELS = {
+  budget: { low: '낮음', medium: '중간', high: '높음' },
+  timeline: { rush: '빠름(긴급)', normal: '보통', flexible: '여유 있음' },
+  team: { beginner: '초보/비개발 중심', mixed: '혼합', advanced: '전문 개발팀' },
+  users: { small: '소규모(<=100)', medium: '중간(<=1,000)', large: '대규모(1,000+)' },
+  dataSensitivity: { low: '낮음', medium: '중간', high: '높음(규제/보안)' },
+};
+const PROFILE_INFERENCE_RULES = {
+  budget: {
+    fallback: 'low',
+    choices: {
+      low: ['무료', '저예산', '예산 없음', '초기', 'mvp', '작게', '싸게'],
+      medium: ['적정 예산', '중간 예산', '월 구독', '운영비'],
+      high: ['엔터프라이즈', '고도화', '전사', '고예산', '대규모 투자'],
+    },
+  },
+  timeline: {
+    fallback: 'rush',
+    choices: {
+      rush: ['당장', '긴급', '빠르게', '즉시', '이번주', '오늘', '일주일', '2주'],
+      normal: ['이번 달', '한달', '몇 주', '분기 초반'],
+      flexible: ['천천히', '장기', '여유', '반기', '장기 로드맵'],
+    },
+  },
+  team: {
+    fallback: 'beginner',
+    choices: {
+      beginner: ['비전공', '초보', '처음', '개발자 없음', '노코드'],
+      mixed: ['주니어', '한두명', '외주', '프론트만'],
+      advanced: ['시니어', '백엔드 팀', 'devops', 'sre', '아키텍처', '인프라'],
+    },
+  },
+  users: {
+    fallback: 'small',
+    choices: {
+      small: ['내부용', '파일럿', '소규모', '베타', '팀 단위'],
+      medium: ['고객사', '커뮤니티', '100명', '1000명', '중간 규모'],
+      large: ['전사', '전국', '수만', '대규모', '글로벌', '공공 서비스'],
+    },
+  },
+  dataSensitivity: {
+    fallback: 'medium',
+    choices: {
+      low: ['익명', '공개 데이터', '비민감', '샘플 데이터'],
+      medium: ['로그인', '기본 회원정보', '일반 사용자 데이터'],
+      high: ['개인정보', '결제', '금융', '의료', '주민', '보안', '민감정보', '권한 통제'],
+    },
+  },
+};
+const TECH_OPTION_LIBRARY = [
+  {
+    id: 'option_a',
+    badge: '옵션 A',
+    title: '빠른 검증형 프레임',
+    frameDescription: '최소 리소스로 아이디어를 빠르게 실험하는 프레임',
+    baseScores: { difficulty: 1, cost: 2, scalability: 2 },
+    costRange: '초기 $0~$80 / 월 $30~$300',
+    scaleGuide: '100명: 안정 / 1,000명: 자동화 병목 가능 / 10,000명: 재설계 필요',
+    suitedFor: [
+      '개발 인력이 거의 없고 빠르게 검증해야 할 때',
+      '요구사항 변경이 많아 실험 속도가 중요한 초기 단계',
+    ],
+    risks: [
+      '자동화 시나리오가 늘면 유지비와 복잡도가 급상승',
+      '고급 권한/감사로그/규제 대응이 필요해지면 한계가 빠르게 옴',
+    ],
+    switchCondition: '월간 활성 사용자 1,000명 이상 또는 권한 규칙 10개 이상이면 옵션 B/C로 전환',
+    fitBonus: {
+      budget: { low: 16, medium: 8, high: 2 },
+      timeline: { rush: 18, normal: 8, flexible: 2 },
+      team: { beginner: 16, mixed: 8, advanced: 2 },
+      users: { small: 12, medium: 2, large: -10 },
+      dataSensitivity: { low: 8, medium: 2, high: -12 },
+    },
+  },
+  {
+    id: 'option_b',
+    badge: '옵션 B',
+    title: '균형 성장형 프레임',
+    frameDescription: '속도와 유지보수, 확장성을 균형 있게 가져가는 프레임',
+    baseScores: { difficulty: 3, cost: 3, scalability: 4 },
+    costRange: '초기 $0~$150 / 월 $50~$700',
+    scaleGuide: '100명: 안정 / 1,000명: 안정 / 10,000명: 튜닝 필요',
+    suitedFor: [
+      '초기 속도와 구조적 확장성의 균형이 필요할 때',
+      '비전공자 PM + 1~2명 개발팀으로 운영할 때',
+    ],
+    risks: [
+      'BaaS 벤더 의존성이 생겨 이관 비용이 커질 수 있음',
+      '권한 모델과 쿼리 최적화를 초기에 잘못 잡으면 성능 이슈 발생',
+    ],
+    switchCondition: '복잡한 도메인 로직/대규모 트래픽(10,000+)이 본격화되면 옵션 C로 분리',
+    fitBonus: {
+      budget: { low: 10, medium: 12, high: 8 },
+      timeline: { rush: 10, normal: 12, flexible: 8 },
+      team: { beginner: 8, mixed: 12, advanced: 10 },
+      users: { small: 8, medium: 12, large: 10 },
+      dataSensitivity: { low: 6, medium: 10, high: 10 },
+    },
+  },
+  {
+    id: 'option_c',
+    badge: '옵션 C',
+    title: '확장 운영형 프레임',
+    frameDescription: '장기 운영과 고트래픽, 보안 요구를 우선하는 프레임',
+    baseScores: { difficulty: 5, cost: 4, scalability: 5 },
+    costRange: '초기 $300~$2,000 / 월 $300~$3,000+',
+    scaleGuide: '100명: 과설계 가능 / 1,000명: 안정 / 10,000명: 확장 유리',
+    suitedFor: [
+      '보안/규제 요구가 명확하고 장기 확장을 전제로 할 때',
+      '전문 개발팀이 있고 운영 자동화까지 고려할 때',
+    ],
+    risks: [
+      '초기 구축 기간과 비용이 높아 MVP 속도가 떨어질 수 있음',
+      '운영 난이도가 높아 인프라/관측/장애 대응 체계가 필요',
+    ],
+    switchCondition: '규제 준수, 다중 서비스 연동, 고트래픽 대응이 핵심 KPI가 되면 유지',
+    fitBonus: {
+      budget: { low: -10, medium: 4, high: 14 },
+      timeline: { rush: -8, normal: 6, flexible: 14 },
+      team: { beginner: -12, mixed: 6, advanced: 16 },
+      users: { small: -6, medium: 8, large: 18 },
+      dataSensitivity: { low: 2, medium: 10, high: 16 },
+    },
+  },
 ];
 
 // "본문 내용"으로 취급하는 탭 목록입니다.
@@ -197,6 +373,331 @@ function getStandardOutput(result) {
   return null;
 }
 
+function getConfidenceBadgeClass(confidence) {
+  return CONFIDENCE_BADGE_CLASS_MAP[confidence] || CONFIDENCE_BADGE_CLASS_MAP.default;
+}
+
+function getHybridStackStatusMeta(status) {
+  return HYBRID_STACK_STATUS_META[status] || HYBRID_STACK_STATUS_META.default;
+}
+
+function clampOneToFive(value) {
+  return Math.max(1, Math.min(5, Math.round(value)));
+}
+
+function inferProfileFactor(sourceText, factorKey) {
+  const rule = PROFILE_INFERENCE_RULES[factorKey];
+  if (!rule) {
+    return {
+      value: 'unknown',
+      confidence: '낮음',
+      reason: '분석 규칙이 없습니다.',
+    };
+  }
+
+  let bestValue = rule.fallback;
+  let bestHits = [];
+
+  Object.entries(rule.choices || {}).forEach(([choiceValue, keywords]) => {
+    const hits = (keywords || []).filter((keyword) => sourceText.includes(String(keyword || '').toLowerCase()));
+    if (hits.length > bestHits.length) {
+      bestValue = choiceValue;
+      bestHits = hits;
+    }
+  });
+
+  const confidence = bestHits.length >= 2 ? '높음' : bestHits.length === 1 ? '중간' : '낮음';
+  const reason = bestHits.length
+    ? `입력 단서: ${bestHits.slice(0, 2).join(', ')}`
+    : '입력 단서가 부족해 초보자 기준 기본값을 적용';
+
+  return {
+    value: bestValue,
+    confidence,
+    reason,
+  };
+}
+
+function inferProjectProfile(sourceText) {
+  return PROJECT_PROFILE_QUESTIONS.reduce((acc, factor) => {
+    acc[factor.id] = inferProfileFactor(sourceText, factor.id);
+    return acc;
+  }, {});
+}
+
+function adjustTechScoresByProfile(option, profile) {
+  let difficulty = option.baseScores.difficulty;
+  let cost = option.baseScores.cost;
+  let scalability = option.baseScores.scalability;
+  const notes = [];
+
+  if (profile.team?.value === 'beginner' && option.id !== 'option_a') {
+    difficulty += 1;
+    notes.push('초보 팀 기준으로 구현 난이도 +1');
+  }
+
+  if (profile.team?.value === 'advanced' && option.id === 'option_c') {
+    difficulty -= 1;
+    notes.push('전문 개발팀 역량으로 구현 난이도 -1');
+  }
+
+  if (profile.timeline?.value === 'rush' && option.id === 'option_a') {
+    difficulty -= 1;
+    notes.push('긴급 일정에서 초기 구현 속도 이점');
+  }
+
+  if (profile.timeline?.value === 'rush' && option.id === 'option_c') {
+    difficulty += 1;
+    notes.push('긴급 일정에서 초기 구축 부담');
+  }
+
+  if (profile.budget?.value === 'low' && option.id === 'option_c') {
+    cost += 1;
+    notes.push('저예산 조건에서 초기/운영 비용 부담');
+  }
+
+  if (profile.users?.value === 'large' && option.id === 'option_a') {
+    scalability -= 1;
+    notes.push('대규모 사용자에서 확장성 한계');
+  }
+
+  if (profile.users?.value === 'large' && option.id === 'option_c') {
+    scalability += 1;
+    notes.push('대규모 사용자에서 확장 여유');
+  }
+
+  if (profile.dataSensitivity?.value === 'high' && option.id === 'option_a') {
+    difficulty += 1;
+    notes.push('민감 데이터 대응으로 구현 제약 증가');
+  }
+
+  if (profile.dataSensitivity?.value === 'high' && option.id !== 'option_a') {
+    cost += 1;
+    notes.push('규제/보안 대응으로 운영비 상승 가능');
+  }
+
+  return {
+    difficulty: clampOneToFive(difficulty),
+    cost: clampOneToFive(cost),
+    scalability: clampOneToFive(scalability),
+    notes,
+  };
+}
+
+function normalizeHybridGuide(hybridGuide) {
+  if (!hybridGuide || typeof hybridGuide !== 'object') return null;
+  const frames = Array.isArray(hybridGuide.frames) ? hybridGuide.frames : [];
+
+  return {
+    frames: frames
+      .map((frame) => {
+        const stacks = Array.isArray(frame?.stacks) ? frame.stacks : [];
+        return {
+          id: String(frame?.id || '').trim().toLowerCase(),
+          strategy: String(frame?.strategy || '').trim(),
+          stacks: stacks
+            .map((stack) => ({
+              name: String(stack?.name || '').trim(),
+              why: String(stack?.why || '').trim(),
+              fit: String(stack?.fit || '').trim(),
+              risk: String(stack?.risk || '').trim(),
+              confidence: String(stack?.confidence || '').trim(),
+            }))
+            .filter((stack) => stack.name)
+            .slice(0, 3),
+        };
+      })
+      .filter((frame) => frame.id),
+  };
+}
+
+function getFallbackStackCandidates(option) {
+  return [
+    {
+      name: '모델 추천 스택 준비 중',
+      why: `${option.badge} 프레임에 맞는 구체 스택을 아직 받지 못했습니다.`,
+      fit: '스택 후보 재추천을 실행하면 입력 기준 후보를 생성합니다.',
+      risk: '후보가 없으면 프레임 기준 의사결정만 가능해 상세 비교가 어려울 수 있습니다.',
+      confidence: '낮음',
+    },
+  ];
+}
+
+function buildTechGuideData(vibeText, standardOutput, hybridGuideRaw = null) {
+  if (!standardOutput || typeof standardOutput !== 'object') return null;
+  const hybridGuide = normalizeHybridGuide(hybridGuideRaw);
+
+  const summary = String(standardOutput['한줄_요약'] || standardOutput.one_line_summary || '').trim();
+  const featureMust = toStringArray((standardOutput['핵심_기능'] || {}).필수 || (standardOutput.core_features || {}).must);
+  const riskItems = toStringArray(standardOutput['리스크_가정_3개'] || standardOutput.risks);
+  const todayRaw = toStringArray(standardOutput['오늘_할_일_3개'] || standardOutput.next_steps_today);
+
+  const sourceText = [vibeText, summary, ...featureMust, ...riskItems]
+    .join(' ')
+    .toLowerCase();
+
+  const profile = inferProjectProfile(sourceText);
+
+  const scoredOptions = TECH_OPTION_LIBRARY.map((option) => {
+    const matchedFrame = hybridGuide?.frames?.find((frame) => frame.id === option.id);
+    const stackCandidates = matchedFrame?.stacks?.length ? matchedFrame.stacks : getFallbackStackCandidates(option);
+    const primaryStack = stackCandidates[0]?.name || '추천 스택 없음';
+
+    const adjusted = adjustTechScoresByProfile(option, profile);
+    const weightedMetricScore = (
+      (6 - adjusted.difficulty) * TECH_GUIDE_WEIGHTS.difficulty
+      + (6 - adjusted.cost) * TECH_GUIDE_WEIGHTS.cost
+      + adjusted.scalability * TECH_GUIDE_WEIGHTS.scalability
+    );
+
+    const fitContributions = PROJECT_PROFILE_QUESTIONS.map((factor) => {
+      const value = profile[factor.id]?.value;
+      return {
+        label: factor.label,
+        value: option.fitBonus?.[factor.id]?.[value] ?? 0,
+      };
+    });
+
+    const fitBonus = fitContributions.reduce((sum, item) => sum + item.value, 0);
+    const topFitReasons = fitContributions
+      .filter((item) => item.value > 0)
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 2)
+      .map((item) => item.label);
+
+    return {
+      ...option,
+      adjustedScores: adjusted,
+      weightedMetricScore: Math.round(weightedMetricScore),
+      fitBonus,
+      totalScore: Math.round(weightedMetricScore + fitBonus),
+      topFitReasons,
+      strategy: matchedFrame?.strategy || option.frameDescription,
+      stackCandidates,
+      primaryStack,
+    };
+  });
+
+  const ranking = [...scoredOptions].sort((a, b) => b.totalScore - a.totalScore);
+  const recommendation = ranking[0];
+  const alternative = ranking[1] || null;
+  const scoreGap = recommendation && alternative ? recommendation.totalScore - alternative.totalScore : 0;
+  const confidence = scoreGap >= 25 ? '높음' : scoreGap >= 10 ? '중간' : '낮음';
+
+  const profileRows = PROJECT_PROFILE_QUESTIONS.map((factor) => {
+    const inferred = profile[factor.id] || { value: '-', confidence: '낮음', reason: '-' };
+    const valueLabel = PROFILE_VALUE_LABELS[factor.id]?.[inferred.value] || inferred.value;
+    return {
+      ...factor,
+      value: inferred.value,
+      valueLabel,
+      confidence: inferred.confidence,
+      reason: inferred.reason,
+    };
+  });
+
+  const todayActions = [
+    recommendation
+      ? `추천 옵션(${recommendation.badge} ${recommendation.title}) 기준으로 MVP 범위를 1페이지로 확정합니다.`
+      : '추천 옵션 기준으로 MVP 범위를 1페이지로 확정합니다.',
+    todayRaw[0] || '핵심 화면 3개와 각 화면의 필수 기능 1개씩을 먼저 고정합니다.',
+    todayRaw[1] || 'Antigravity 프롬프트로 1차 구현을 요청하고 결과를 개발 스펙과 비교합니다.',
+  ].slice(0, 3);
+
+  while (todayActions.length < 3) {
+    todayActions.push('검수 기준(성공 조건/테스트)을 명시해 다음 수정 요청을 준비합니다.');
+  }
+
+  return {
+    profileRows,
+    options: scoredOptions,
+    ranking,
+    recommendation,
+    alternative,
+    confidence,
+    scoreGap,
+    oneLine: recommendation
+      ? `${recommendation.badge} ${recommendation.title}${recommendation.primaryStack ? ` · ${recommendation.primaryStack}` : ''} 추천 (${confidence} 확신, 점수차 ${scoreGap}점)`
+      : '추천 옵션을 계산하지 못했습니다.',
+    todayActions,
+  };
+}
+
+function buildRecommendedGuidePrompt(masterPrompt, techGuide) {
+  const basePrompt = String(masterPrompt || '').trim();
+  if (!basePrompt || !techGuide?.recommendation) return basePrompt;
+
+  const rec = techGuide.recommendation;
+  const candidateText = (rec.stackCandidates || []).map((item) => item.name).filter(Boolean).join(', ');
+  const guideLines = [
+    basePrompt,
+    '',
+    '---',
+    '[기술 선택 안내자 메모]',
+    `- 추천 옵션: ${rec.badge} ${rec.title}`,
+    `- 추천 스택(동적 후보): ${rec.primaryStack || '-'}`,
+    `- 대체 후보: ${candidateText || '-'}`,
+    `- 점수(입력 기반 추정): 난이도 ${rec.adjustedScores.difficulty}/5, 비용 ${rec.adjustedScores.cost}/5, 확장성 ${rec.adjustedScores.scalability}/5`,
+    `- 핵심 근거: ${rec.topFitReasons.length ? rec.topFitReasons.join(', ') : '기본 가중치 기준 우세'}`,
+    `- 주요 리스크: ${rec.risks[0] || '-'}`,
+    `- 전환 조건: ${rec.switchCondition}`,
+  ];
+
+  return guideLines.join('\n');
+}
+
+/**
+ * 활성 탭에 맞는 상단 안내문구를 반환합니다.
+ * 모든 탭에서 "지금 이 화면에서 무엇을 보면 되는지"를 한 줄로 안내합니다.
+ */
+function getTopGuideItems(activeTab, showThinking) {
+  if (activeTab === 'nondev') {
+    return [
+      { tone: 'blue', title: '비전공자 페이지 안내', description: '아이디어를 쉬운 말로 풀어쓴 결과를 확인하고 빠진 요구사항을 먼저 점검할 때 사용' },
+    ];
+  }
+  if (activeTab === 'dev') {
+    return [
+      { tone: 'blue', title: '개발자 페이지 안내', description: '실제 구현을 위한 기술 요구사항/범위를 검토하고 개발팀과 공유할 때 사용' },
+    ];
+  }
+  if (activeTab === TECH_GUIDE_TAB_ID) {
+    return [
+      { tone: 'blue', title: '기술 선택 페이지 안내', description: '프레임(A/B/C)은 고정하고, 구체 스택 후보는 입력 기반으로 동적 추천해 비교할 때 사용' },
+      { tone: 'slate', title: '기본 가중치', description: `난이도 ${TECH_GUIDE_WEIGHTS.difficulty} / 비용 ${TECH_GUIDE_WEIGHTS.cost} / 확장성 ${TECH_GUIDE_WEIGHTS.scalability}` },
+    ];
+  }
+  if (activeTab === 'thinking') {
+    return [
+      {
+        tone: showThinking ? 'emerald' : 'slate',
+        title: '사고 페이지 안내',
+        description: showThinking
+          ? '문제 재진술, 가정, 불확실성, 대안 비교를 보면서 의사결정을 구조화할 때 사용'
+          : '학습 모드가 OFF라 사고 구조를 숨긴 상태입니다. 학습 모드를 ON으로 바꾸면 상세 분석이 표시됩니다.',
+      },
+    ];
+  }
+  if (activeTab === 'layers') {
+    return [
+      { tone: 'blue', title: '레이어 페이지 안내', description: 'L1~L5 레이어를 순서대로 보며 범위 정의부터 실행 항목까지 누락 없이 점검할 때 사용' },
+    ];
+  }
+  if (activeTab === 'glossary') {
+    return [
+      { tone: 'blue', title: '용어 페이지 안내', description: '핵심 용어를 단계별로 보고, 본문에서 위치를 찾거나 수정 요청 템플릿을 만들 때 사용' },
+    ];
+  }
+  if (activeTab === PROMPT_SPEC_TAB_ID) {
+    return [
+      { tone: 'amber', title: 'Antigravity용 프롬프트', description: 'Antigravity에 붙여넣어 코드 생성을 요청할 때 사용' },
+      { tone: 'blue', title: '개발 전달용 스펙', description: '사람 개발자/팀과 요구사항을 문서로 공유해 범위를 먼저 합의할 때 사용' },
+      { tone: 'slate', title: 'Antigravity 사용 순서', description: '1) 개발 전달용 스펙으로 범위 확인 → 2) Antigravity용 프롬프트로 구현 요청 → 3) 결과를 스펙과 비교해 검수' },
+    ];
+  }
+  return [];
+}
+
 /**
  * 메인 화면 컴포넌트입니다.
  * 초보자 관점에서 보면, "입력 -> 변환 -> 탭별 결과 확인" 흐름 전체를 담당합니다.
@@ -210,9 +711,14 @@ function App() {
   const [result, setResult] = useState(null);
   const [status, setStatus] = useState('idle');
   const [activeModel, setActiveModel] = useState('OFFLINE');
+  const [modelOptions, setModelOptions] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [isModelOptionsLoading, setIsModelOptionsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copiedMaster, setCopiedMaster] = useState(false);
+  const [copiedGuidePrompt, setCopiedGuidePrompt] = useState(false);
   const [activeTab, setActiveTab] = useState('nondev');
+  const [promptSpecFocus, setPromptSpecFocus] = useState('prompt');
   const [lastContentTab, setLastContentTab] = useState('nondev');
   const [showThinking, setShowThinking] = useState(true);
   const [glossaryLevel, setGlossaryLevel] = useState('beginner');
@@ -221,6 +727,8 @@ function App() {
   const [termLocateMessage, setTermLocateMessage] = useState('');
   const [pendingGlossaryFocusTermId, setPendingGlossaryFocusTermId] = useState(null);
   const [pendingContentScrollTermId, setPendingContentScrollTermId] = useState(null);
+  const [hybridStackGuide, setHybridStackGuide] = useState(null);
+  const [hybridStackGuideStatus, setHybridStackGuideStatus] = useState('idle');
 
   // API 키 설정 모달 관련 상태
   const [apiKey, setApiKey] = useState(getStoredApiKey);
@@ -231,6 +739,8 @@ function App() {
   const textareaRef = useRef(null);
   const contentContainerRef = useRef(null);
   const glossaryCardRefs = useRef({});
+  const promptPanelRef = useRef(null);
+  const devSpecPanelRef = useRef(null);
 
   // -------------------------------------------------------
   // 파생 데이터(useMemo)
@@ -370,6 +880,26 @@ function App() {
   const thinking = result?.layers?.L1_thinking;
   const thinkingMd = useMemo(() => buildThinkingMarkdown(thinking), [thinking]);
   const glossaryMd = useMemo(() => buildGlossaryMarkdown(result?.glossary), [result]);
+  const masterPromptText = result?.artifacts?.master_prompt || '';
+  const devSpecText = result?.artifacts?.dev_spec_md || '';
+  const techGuide = useMemo(
+    () => buildTechGuideData(vibe, standardOutput, hybridStackGuide),
+    [hybridStackGuide, standardOutput, vibe],
+  );
+  const techRankingOrder = useMemo(
+    () => (techGuide ? techGuide.ranking.map((item) => item.id) : []),
+    [techGuide],
+  );
+  const recommendedGuidePromptText = useMemo(
+    () => buildRecommendedGuidePrompt(masterPromptText, techGuide),
+    [masterPromptText, techGuide],
+  );
+  const topGuideItems = useMemo(() => getTopGuideItems(activeTab, showThinking), [activeTab, showThinking]);
+  const hybridStatusMeta = useMemo(
+    () => getHybridStackStatusMeta(hybridStackGuideStatus),
+    [hybridStackGuideStatus],
+  );
+  const isModelSelectorDisabled = !apiKey || status === 'processing' || isModelOptionsLoading || modelOptions.length === 0;
 
   // 현재 탭에 맞는 본문 마크다운 선택기
   const currentTabMarkdown = useMemo(() => {
@@ -377,8 +907,10 @@ function App() {
     if (activeTab === 'nondev') return result.artifacts?.nondev_spec_md || '';
     if (activeTab === 'dev') return result.artifacts?.dev_spec_md || '';
     if (activeTab === 'thinking') return showThinking ? thinkingMd : '학습 모드가 OFF 상태입니다.';
+    if (activeTab === TECH_GUIDE_TAB_ID) return '';
     if (activeTab === 'layers') return '';
     if (activeTab === 'glossary') return glossaryMd || '용어사전이 비어 있습니다.';
+    if (activeTab === PROMPT_SPEC_TAB_ID) return '';
     return '';
   }, [activeTab, glossaryMd, result, showThinking, thinkingMd]);
 
@@ -389,6 +921,36 @@ function App() {
     thinking: thinkingMd || '',
     layers: layerCards.map((card) => [card.title, card.goal, ...(card.lines || [])].join('\n')).join('\n'),
   }), [layerCards, result, thinkingMd]);
+
+  const loadModelOptions = useCallback(async (nextApiKey) => {
+    if (!nextApiKey) {
+      setModelOptions([]);
+      setSelectedModel('');
+      setIsModelOptionsLoading(false);
+      return;
+    }
+
+    setIsModelOptionsLoading(true);
+    try {
+      const fetchedModels = await fetchAvailableModels(nextApiKey);
+      const uniqueModels = Array.from(new Set(
+        (Array.isArray(fetchedModels) ? fetchedModels : [])
+          .map((item) => String(item || '').trim())
+          .filter(Boolean),
+      ));
+
+      setModelOptions(uniqueModels);
+      setSelectedModel((prev) => {
+        if (prev && uniqueModels.includes(prev)) return prev;
+        return uniqueModels[0] || '';
+      });
+    } catch {
+      setModelOptions([]);
+      setSelectedModel('');
+    } finally {
+      setIsModelOptionsLoading(false);
+    }
+  }, []);
 
   // 텍스트 입력창 높이 자동 확장
   // 예시: 입력 줄이 늘어나면 textarea 높이도 함께 커집니다.
@@ -402,6 +964,17 @@ function App() {
   useEffect(() => {
     localStorage.removeItem(API_KEY_STORAGE_KEY);
   }, []);
+
+  // API 키가 준비되면 사용 가능한 모델 후보군을 로드합니다.
+  useEffect(() => {
+    if (!apiKey) {
+      setModelOptions([]);
+      setSelectedModel('');
+      setIsModelOptionsLoading(false);
+      return;
+    }
+    void loadModelOptions(apiKey);
+  }, [apiKey, loadModelOptions]);
 
   // 세션 키 TTL(30분) 만료를 타이머로 감시합니다.
   // 만료 시 키를 비우고 설정 모달을 다시 열어 재입력을 유도합니다.
@@ -470,6 +1043,13 @@ function App() {
     setPendingContentScrollTermId(null);
   }, [activeTab, pendingContentScrollTermId, currentTabMarkdown]);
 
+  // 프롬프트/개발 스펙 통합 화면에서 클릭한 섹션으로 시선을 맞춥니다.
+  useEffect(() => {
+    if (activeTab !== PROMPT_SPEC_TAB_ID) return;
+    const node = promptSpecFocus === 'spec' ? devSpecPanelRef.current : promptPanelRef.current;
+    node?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [activeTab, promptSpecFocus]);
+
   /**
    * 설정 모달의 키 저장 버튼 핸들러
    * - sessionStorage에만 저장
@@ -484,6 +1064,30 @@ function App() {
     setApiKey(key);
     setIsSettingsOpen(false);
     setTempKey('');
+  };
+
+  const requestHybridStackGuide = useCallback(async (nextResult, nextVibe) => {
+    const standardPayload = getStandardOutput(nextResult);
+    if (!apiKey || !standardPayload) {
+      setHybridStackGuide(null);
+      setHybridStackGuideStatus('error');
+      return;
+    }
+
+    setHybridStackGuideStatus('loading');
+    try {
+      const guide = await recommendHybridStacks(nextVibe, standardPayload, apiKey, { modelName: selectedModel });
+      setHybridStackGuide(guide);
+      setHybridStackGuideStatus('success');
+    } catch {
+      setHybridStackGuide(null);
+      setHybridStackGuideStatus('error');
+    }
+  }, [apiKey, selectedModel]);
+
+  const handleRefreshHybridStacks = () => {
+    if (!result) return;
+    void requestHybridStackGuide(result, vibe);
   };
 
   /**
@@ -513,18 +1117,34 @@ function App() {
 
     setStatus('processing');
     setResult(null);
+    setHybridStackGuide(null);
+    setHybridStackGuideStatus('idle');
 
     try {
-      const generated = await transmuteVibeToSpec(vibe, apiKey, { showThinking });
+      const generated = await transmuteVibeToSpec(vibe, apiKey, { showThinking, modelName: selectedModel });
       setResult(generated);
-      setActiveModel((generated.model || activeModel).toUpperCase());
+      const usedModel = generated.model || selectedModel || activeModel;
+      setActiveModel(String(usedModel || activeModel).toUpperCase());
+      setSelectedModel((prev) => String(generated.model || prev || '').trim());
+      setModelOptions((prev) => {
+        const model = String(generated.model || '').trim();
+        if (!model) return prev;
+        return prev.includes(model) ? prev : [model, ...prev];
+      });
       setActiveTab('nondev');
       setSelectedTermId(null);
+      setCopied(false);
+      setCopiedMaster(false);
+      setCopiedGuidePrompt(false);
+      setPromptSpecFocus('prompt');
       setStatus('success');
+      void requestHybridStackGuide(generated, vibe);
     } catch {
       console.error('Transmutation failed: Neural link disruption detected.');
       setStatus('error');
       setActiveModel('LINK FAILURE');
+      setHybridStackGuide(null);
+      setHybridStackGuideStatus('error');
     }
   };
 
@@ -545,6 +1165,15 @@ function App() {
 
   const handleCopyMasterPrompt = () => {
     copyToClipboardWithFeedback(result?.artifacts?.master_prompt, setCopiedMaster);
+  };
+
+  const handleCopyGuidePrompt = () => {
+    copyToClipboardWithFeedback(recommendedGuidePromptText, setCopiedGuidePrompt);
+  };
+
+  const handleOpenPromptSpec = (focus) => {
+    setPromptSpecFocus(focus);
+    setActiveTab(PROMPT_SPEC_TAB_ID);
   };
 
   /**
@@ -744,7 +1373,23 @@ function App() {
         <div className="flex items-center gap-4">
           <div className="hidden md:flex items-center gap-2 text-[11px] text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-md">
             <Terminal className="w-3 h-3" />
-            <span>사용 모델: {activeModel}</span>
+            <label htmlFor="model-selector" className="whitespace-nowrap">사용 모델:</label>
+            <select
+              id="model-selector"
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              disabled={isModelSelectorDisabled}
+              className="bg-white border border-blue-200 rounded px-2 py-1 text-[11px] text-blue-700 outline-none focus:border-blue-400 disabled:opacity-60 disabled:cursor-not-allowed"
+              title="사용 가능한 모델 후보군에서 선택"
+            >
+              {isModelOptionsLoading && <option value="">모델 목록 로딩 중...</option>}
+              {!isModelOptionsLoading && modelOptions.length === 0 && <option value="">{activeModel}</option>}
+              {modelOptions.map((modelName) => (
+                <option key={modelName} value={modelName}>
+                  {modelName.toUpperCase()}
+                </option>
+              ))}
+            </select>
           </div>
           <button
             onClick={() => setShowThinking((v) => !v)}
@@ -869,7 +1514,7 @@ function App() {
         <AnimatePresence>
           {status === 'success' && result && (
             <Motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="relative bg-white border border-slate-200 rounded-xl shadow-sm">
-              <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-start gap-4">
+              <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-start gap-2">
                 {/* 탭 네비게이션 */}
                 <div className="flex items-center gap-2 flex-wrap">
                   {TABS.map((tab) => {
@@ -897,47 +1542,268 @@ function App() {
                       </button>
                     );
                   })}
-                </div>
+                  <span className="hidden md:inline-block w-px h-5 bg-slate-200 mx-1" aria-hidden="true" />
+                  {QUICK_ACTION_BUTTONS.map((item) => {
+                    const Icon = item.icon;
+                    const selected = activeTab === PROMPT_SPEC_TAB_ID && promptSpecFocus === item.id;
+                    const selectedClass = item.id === 'prompt'
+                      ? 'text-amber-700 border-amber-300 bg-amber-50'
+                      : 'text-blue-700 border-blue-300 bg-blue-50';
 
-                {/* 결과 복사 버튼 + 사용 시점 가이드 */}
-                <div className="ml-auto w-full lg:w-auto flex flex-col items-end gap-2">
-                  <div className="flex items-center justify-end gap-4 flex-wrap">
-                    <button
-                      onClick={handleCopyMasterPrompt}
-                      title="Antigravity에 붙여넣어 구현 요청을 시작할 때 사용"
-                      className="flex items-center gap-2 text-xs md:text-sm text-amber-700 hover:text-amber-800 transition-colors"
-                    >
-                      {copiedMaster ? <><Check className="w-4 h-4" />Antigravity 프롬프트 복사됨</> : <><Zap className="w-4 h-4" />Antigravity용 프롬프트 복사</>}
-                    </button>
-                    <button
-                      onClick={handleCopyDevSpec}
-                      title="사람 개발자/팀에 공유해 구현 범위를 합의할 때 사용"
-                      className="flex items-center gap-2 text-xs md:text-sm text-blue-700 hover:text-blue-800 transition-colors"
-                    >
-                      {copied ? <><Check className="w-4 h-4" />개발 전달 스펙 복사됨</> : <><Copy className="w-4 h-4" />개발 전달용 스펙 복사</>}
-                    </button>
-                  </div>
-
-                  <div className="w-full lg:w-[620px] grid grid-cols-1 gap-2">
-                    <div className="px-3 py-2 rounded-md border border-amber-200 bg-amber-50 text-[11px] text-amber-800">
-                      <span className="font-semibold">Antigravity용 프롬프트:</span> Antigravity에 붙여넣어 코드 생성을 요청할 때 사용
-                    </div>
-                    <div className="px-3 py-2 rounded-md border border-blue-200 bg-blue-50 text-[11px] text-blue-800">
-                      <span className="font-semibold">개발 전달용 스펙:</span> 사람 개발자/팀과 요구사항을 문서로 공유해 범위를 먼저 합의할 때 사용
-                    </div>
-                    <div className="px-3 py-2 rounded-md border border-slate-200 bg-slate-50 text-[11px] text-slate-700">
-                      <span className="font-semibold">Antigravity 사용 순서:</span> 1) 개발 전달용 스펙으로 범위 확인 → 2) Antigravity용 프롬프트로 구현 요청 → 3) 결과를 스펙과 비교해 검수
-                    </div>
-                  </div>
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => handleOpenPromptSpec(item.id)}
+                        className={`flex items-center gap-2 px-3 py-2 text-xs md:text-sm border rounded-lg transition-colors ${selected
+                          ? selectedClass
+                          : 'text-slate-700 border-slate-300 hover:bg-slate-50'
+                          }`}
+                      >
+                        <Icon className="w-4 h-4" />
+                        {item.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
               <div ref={contentContainerRef} className="p-6 md:p-8 prose prose-cyber max-w-none prose-p:text-slate-700 prose-headings:text-blue-700 prose-headings:tracking-tight prose-code:text-blue-700 prose-pre:bg-slate-50 prose-pre:border prose-pre:border-slate-200">
+                {topGuideItems.length > 0 && (
+                  <div className="not-prose mb-6 space-y-2">
+                    {topGuideItems.map((item, idx) => (
+                      <div key={`top-guide-${activeTab}-${idx}`} className={`px-3 py-2 rounded-md border text-[11px] ${GUIDE_TONE_CLASS_MAP[item.tone] || GUIDE_TONE_CLASS_MAP.slate}`}>
+                        <span className="font-semibold">{item.title}:</span> {item.description}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* 일반 탭(비전공자/개발자) 마크다운 렌더 */}
                 {shouldRenderGeneralMarkdown && (
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                     {currentTabMarkdown}
                   </ReactMarkdown>
+                )}
+
+                {/* 프롬프트/개발 스펙 통합 보기 */}
+                {activeTab === PROMPT_SPEC_TAB_ID && (
+                  <div className="not-prose space-y-4">
+                    <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                      <article
+                        ref={promptPanelRef}
+                        className={`border rounded-md p-4 bg-white ${promptSpecFocus === 'prompt' ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200'}`}
+                      >
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <h3 className="text-amber-700 font-bold text-base">Antigravity용 프롬프트</h3>
+                          <button
+                            type="button"
+                            onClick={handleCopyMasterPrompt}
+                            className="flex items-center gap-2 text-xs md:text-sm px-3 py-1.5 rounded border border-amber-300 text-amber-700 hover:bg-amber-50"
+                          >
+                            {copiedMaster ? <><Check className="w-4 h-4" />복사됨</> : <><Copy className="w-4 h-4" />복사</>}
+                          </button>
+                        </div>
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 max-h-[420px] overflow-auto">
+                          <pre className="m-0 whitespace-pre-wrap break-words text-xs md:text-sm leading-relaxed text-slate-800">{masterPromptText || '생성된 프롬프트가 없습니다. 먼저 사고 구조화를 실행해주세요.'}</pre>
+                        </div>
+                      </article>
+
+                      <article
+                        ref={devSpecPanelRef}
+                        className={`border rounded-md p-4 bg-white ${promptSpecFocus === 'spec' ? 'border-blue-300 ring-2 ring-blue-100' : 'border-slate-200'}`}
+                      >
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <h3 className="text-blue-700 font-bold text-base">개발 전달용 스펙</h3>
+                          <button
+                            type="button"
+                            onClick={handleCopyDevSpec}
+                            className="flex items-center gap-2 text-xs md:text-sm px-3 py-1.5 rounded border border-blue-300 text-blue-700 hover:bg-blue-50"
+                          >
+                            {copied ? <><Check className="w-4 h-4" />복사됨</> : <><Copy className="w-4 h-4" />복사</>}
+                          </button>
+                        </div>
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 max-h-[420px] overflow-auto">
+                          <pre className="m-0 whitespace-pre-wrap break-words text-xs md:text-sm leading-relaxed text-slate-800">{devSpecText || '생성된 개발 스펙이 없습니다. 먼저 사고 구조화를 실행해주세요.'}</pre>
+                        </div>
+                      </article>
+                    </section>
+                  </div>
+                )}
+
+                {/* 기술 선택 탭 전용 비교/추천 UI */}
+                {activeTab === TECH_GUIDE_TAB_ID && techGuide && (
+                  <div className="not-prose space-y-6">
+                    <section className="border border-blue-200 rounded-md p-4 bg-blue-50 space-y-2">
+                      <p className="text-[11px] text-blue-700 font-semibold">이번 입력 기준 최종 추천</p>
+                      <h3 className="text-blue-800 font-bold text-lg">{techGuide.oneLine}</h3>
+                      <p className="text-sm text-blue-900">
+                        {techGuide.recommendation?.topFitReasons?.length
+                          ? `주요 적합 요인: ${techGuide.recommendation.topFitReasons.join(', ')}`
+                          : '기본 가중치와 입력 조건을 기준으로 우선 추천안을 계산했습니다.'}
+                      </p>
+                      {techGuide.alternative && (
+                        <p className="text-xs text-blue-700">
+                          차선안: {techGuide.alternative.badge} {techGuide.alternative.title}
+                        </p>
+                      )}
+                      <div className="flex items-center gap-2 flex-wrap pt-1">
+                        <span className={`inline-flex px-2 py-0.5 rounded border text-[11px] ${hybridStatusMeta.className}`}>
+                          동적 스택 후보: {hybridStatusMeta.label}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleRefreshHybridStacks}
+                          disabled={hybridStackGuideStatus === 'loading'}
+                          className="text-xs md:text-sm px-3 py-1.5 rounded border border-blue-300 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          스택 후보 다시 추천
+                        </button>
+                      </div>
+                    </section>
+
+                    <section className="space-y-3">
+                      <h3 className="text-blue-700 font-bold text-lg">입력 기반 판단 요소(5가지)</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                        {techGuide.profileRows.map((row) => (
+                          <article key={`profile-${row.id}`} className="border border-slate-200 rounded-md p-3 bg-white space-y-2">
+                            <p className="text-[11px] text-blue-700 font-semibold">{row.label}</p>
+                            <p className="text-sm font-bold text-slate-800">{row.valueLabel}</p>
+                            <p className="text-[11px] text-slate-600">{row.question}</p>
+                            <p className="text-[11px] text-slate-500">{row.reason}</p>
+                            <span className={`inline-flex px-2 py-0.5 rounded border text-[11px] ${getConfidenceBadgeClass(row.confidence)}`}>
+                              확신도: {row.confidence}
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="space-y-3">
+                      <h3 className="text-blue-700 font-bold text-lg">옵션 비교표</h3>
+                      <div className="overflow-x-auto border border-slate-200 rounded-md">
+                        <table className="w-full min-w-[840px] border-collapse text-sm">
+                          <thead className="bg-blue-50 text-blue-800">
+                            <tr>
+                              <th className="px-3 py-2 text-left border-b border-slate-200">순위</th>
+                              <th className="px-3 py-2 text-left border-b border-slate-200">옵션</th>
+                              <th className="px-3 py-2 text-left border-b border-slate-200">난이도(1~5)</th>
+                              <th className="px-3 py-2 text-left border-b border-slate-200">비용(1~5)</th>
+                              <th className="px-3 py-2 text-left border-b border-slate-200">확장성(1~5)</th>
+                              <th className="px-3 py-2 text-left border-b border-slate-200">총점</th>
+                              <th className="px-3 py-2 text-left border-b border-slate-200">월 비용 범위</th>
+                              <th className="px-3 py-2 text-left border-b border-slate-200">확장 가이드</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {techGuide.options.map((option) => {
+                              const rank = techRankingOrder.indexOf(option.id) + 1;
+                              const isRecommended = techGuide.recommendation?.id === option.id;
+                              return (
+                                <tr key={`tech-option-row-${option.id}`} className={isRecommended ? 'bg-emerald-50/70' : 'bg-white'}>
+                                  <td className="px-3 py-2 border-b border-slate-100">{rank}위</td>
+                                  <td className="px-3 py-2 border-b border-slate-100">
+                                    <div className="font-semibold text-slate-800">{option.badge} {option.title}</div>
+                                    <div className="text-xs text-slate-500">대표 스택: {option.primaryStack}</div>
+                                    <div className="text-[11px] text-slate-400">{option.strategy}</div>
+                                  </td>
+                                  <td className="px-3 py-2 border-b border-slate-100">{option.adjustedScores.difficulty}</td>
+                                  <td className="px-3 py-2 border-b border-slate-100">{option.adjustedScores.cost}</td>
+                                  <td className="px-3 py-2 border-b border-slate-100">{option.adjustedScores.scalability}</td>
+                                  <td className="px-3 py-2 border-b border-slate-100">
+                                    <span className={`font-semibold ${isRecommended ? 'text-emerald-700' : 'text-slate-800'}`}>
+                                      {option.totalScore}
+                                    </span>
+                                    <span className="ml-2 text-[11px] text-slate-500">(가중합 {option.weightedMetricScore} + 적합도 {option.fitBonus})</span>
+                                  </td>
+                                  <td className="px-3 py-2 border-b border-slate-100 text-slate-700">{option.costRange}</td>
+                                  <td className="px-3 py-2 border-b border-slate-100 text-slate-700">{option.scaleGuide}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+
+                    <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      {techGuide.options.map((option) => {
+                        const isRecommended = techGuide.recommendation?.id === option.id;
+                        return (
+                          <article
+                            key={`tech-option-card-${option.id}`}
+                            className={`rounded-md border p-4 bg-white space-y-3 ${isRecommended ? 'border-emerald-300 ring-2 ring-emerald-100' : 'border-slate-200'}`}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <h4 className="text-blue-700 font-bold text-base">{option.badge} {option.title}</h4>
+                              {isRecommended && <span className="text-[11px] px-2 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-700">추천</span>}
+                            </div>
+                            <p className="text-xs text-slate-600">{option.strategy}</p>
+                            <p className="text-xs text-slate-700">{option.switchCondition}</p>
+
+                            <div className="space-y-1">
+                              <p className="text-xs font-semibold text-emerald-700">동적 스택 후보</p>
+                              <ul className="list-disc pl-5 text-xs text-slate-700 space-y-1">
+                                {option.stackCandidates.map((item, idx) => (
+                                  <li key={`${option.id}-stack-${idx}`}>
+                                    <span className="font-semibold">{item.name}</span>
+                                    {item.why ? `: ${item.why}` : ''}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+
+                            <div className="space-y-1">
+                              <p className="text-xs font-semibold text-blue-700">적합 상황</p>
+                              <ul className="list-disc pl-5 text-xs text-slate-700 space-y-1">
+                                {option.suitedFor.map((item, idx) => (
+                                  <li key={`${option.id}-fit-${idx}`}>{item}</li>
+                                ))}
+                              </ul>
+                            </div>
+
+                            <div className="space-y-1">
+                              <p className="text-xs font-semibold text-rose-700">주요 리스크</p>
+                              <ul className="list-disc pl-5 text-xs text-slate-700 space-y-1">
+                                {option.risks.map((item, idx) => (
+                                  <li key={`${option.id}-risk-${idx}`}>{item}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </section>
+
+                    <section className="border border-slate-200 rounded-md p-4 bg-white space-y-4">
+                      <div className="space-y-2">
+                        <h3 className="text-blue-700 font-bold text-lg">오늘 할 일 3개</h3>
+                        <ol className="list-decimal pl-5 text-sm text-slate-800 space-y-1">
+                          {techGuide.todayActions.map((item, idx) => (
+                            <li key={`tech-guide-next-${idx}`}>{item}</li>
+                          ))}
+                        </ol>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={handleCopyGuidePrompt}
+                          className="flex items-center gap-2 text-xs md:text-sm px-3 py-1.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                        >
+                          {copiedGuidePrompt ? <><Check className="w-4 h-4" />추천 반영 프롬프트 복사됨</> : <><Zap className="w-4 h-4" />추천 반영 Antigravity 프롬프트 복사</>}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenPromptSpec('prompt')}
+                          className="flex items-center gap-2 text-xs md:text-sm px-3 py-1.5 rounded border border-blue-300 text-blue-700 hover:bg-blue-50"
+                        >
+                          <Copy className="w-4 h-4" />
+                          프롬프트/개발 스펙 화면 열기
+                        </button>
+                      </div>
+                    </section>
+                  </div>
                 )}
 
                 {/* 사고 탭 전용 구조화 UI */}

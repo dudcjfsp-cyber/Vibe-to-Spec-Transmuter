@@ -1201,9 +1201,15 @@ export async function fetchAvailableModels(apiKey) {
 /**
  * 우선순위(PREFERENCE_ORDER)에 따라 최적 모델 1개를 선택합니다.
  */
-async function getOptimalModel(apiKey) {
+async function getOptimalModel(apiKey, preferredModel = '') {
   if (availableModels.length === 0) {
     availableModels = await fetchAvailableModels(apiKey);
+  }
+
+  const preferred = toSafeString(preferredModel).toLowerCase();
+  if (preferred) {
+    const matched = availableModels.find((item) => toSafeString(item).toLowerCase() === preferred);
+    if (matched) return matched;
   }
 
   for (const preferred of PREFERENCE_ORDER) {
@@ -1222,20 +1228,160 @@ async function getOptimalModel(apiKey) {
  * - 모델 응답: "초안 문서"
  * - normalizeResult: "양식에 맞춘 최종 제출본"
  */
-export async function transmuteVibeToSpec(vibe, apiKey, { showThinking = true } = {}) {
+export async function transmuteVibeToSpec(vibe, apiKey, { showThinking = true, modelName = '' } = {}) {
   if (!apiKey) {
     throw new Error('API key is missing.');
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelName = await getOptimalModel(apiKey);
-  const model = genAI.getGenerativeModel({ model: modelName });
+  const selectedModel = await getOptimalModel(apiKey, modelName);
+  const model = genAI.getGenerativeModel({ model: selectedModel });
 
   try {
     const parsed = await parseJsonWithOneRetry(model, vibe, showThinking);
-    return normalizeResult(parsed, modelName);
+    return normalizeResult(parsed, selectedModel);
   } catch (error) {
     console.error('Transmutation failed:', error);
     throw new Error('Transmutation interrupted by model or JSON parsing failure.');
+  }
+}
+
+function normalizeHybridStackGuide(raw, fallbackModel) {
+  const safe = isObject(raw) ? raw : {};
+  const framesSource = Array.isArray(safe.frames) ? safe.frames : [];
+  const frameDefaults = [
+    { id: 'option_a', label: '옵션 A', strategy: '빠른 검증형 프레임' },
+    { id: 'option_b', label: '옵션 B', strategy: '균형 성장형 프레임' },
+    { id: 'option_c', label: '옵션 C', strategy: '확장 운영형 프레임' },
+  ];
+
+  const normalizeConfidence = (value) => {
+    const normalized = toSafeString(value, '').toLowerCase();
+    if (['high', '높음'].includes(normalized)) return 'high';
+    if (['medium', '중간'].includes(normalized)) return 'medium';
+    return 'low';
+  };
+
+  const frames = frameDefaults.map((base) => {
+    const source = framesSource.find((item) => toSafeString(item?.id, '').toLowerCase() === base.id) || {};
+    const stacksSource = Array.isArray(source.stacks) ? source.stacks : [];
+    const names = new Set();
+
+    const stacks = stacksSource
+      .map((stackItem) => ({
+        name: toSafeString(stackItem?.name),
+        why: toSafeString(stackItem?.why),
+        fit: toSafeString(stackItem?.fit),
+        risk: toSafeString(stackItem?.risk),
+        confidence: normalizeConfidence(stackItem?.confidence),
+      }))
+      .filter((stackItem) => {
+        const key = stackItem.name.toLowerCase();
+        if (!key || names.has(key)) return false;
+        names.add(key);
+        return true;
+      })
+      .slice(0, 3);
+
+    return {
+      id: base.id,
+      label: toSafeString(source.label, base.label),
+      strategy: toSafeString(source.strategy, base.strategy),
+      stacks,
+    };
+  });
+
+  return {
+    model: toSafeString(safe.model, fallbackModel),
+    frames,
+  };
+}
+
+function buildHybridStackPrompt(vibe, standardOutput) {
+  const safeOutput = isObject(standardOutput) ? standardOutput : {};
+  const summary = toSafeString(
+    safeOutput[K.SUMMARY] ?? safeOutput['한줄_요약'] ?? safeOutput.one_line_summary,
+    '',
+  );
+  const must = toStringArray(
+    (safeOutput[K.FEATURES] || {})[K.MUST]
+    ?? (safeOutput['핵심_기능'] || {}).필수
+    ?? (safeOutput.core_features || {}).must,
+  ).slice(0, 5);
+  const risks = toStringArray(safeOutput[K.RISKS] ?? safeOutput['리스크_가정_3개'] ?? safeOutput.risks).slice(0, 3);
+
+  return `
+You are a pragmatic technical stack advisor for beginner-friendly product teams.
+Task: keep 3 fixed decision frames(option_a/option_b/option_c), but propose concrete stacks dynamically from user context.
+
+Return JSON only (no markdown) with this exact schema:
+{
+  "frames": [
+    {
+      "id": "option_a|option_b|option_c",
+      "label": "옵션 A|옵션 B|옵션 C",
+      "strategy": "string",
+      "stacks": [
+        {
+          "name": "string",
+          "why": "string",
+          "fit": "string",
+          "risk": "string",
+          "confidence": "high|medium|low"
+        }
+      ]
+    }
+  ]
+}
+
+Rules:
+- Always return exactly 3 frames: option_a, option_b, option_c.
+- Propose 2~3 concrete stacks per frame. Mention real stacks when relevant (e.g., Rails, Django, NestJS, Spring Boot, .NET, Laravel, Supabase, Firebase).
+- Avoid duplicate stack names across all frames when possible.
+- Keep descriptions concise and beginner-readable.
+- No extra top-level keys.
+
+User vibe:
+${vibe}
+
+Structured summary:
+- summary: ${summary || '-'}
+- must_features: ${must.join(' | ') || '-'}
+- risks: ${risks.join(' | ') || '-'}
+`.trim();
+}
+
+async function parseHybridStackJsonWithOneRetry(model, prompt) {
+  const first = await model.generateContent(prompt);
+  const firstResponse = await first.response;
+  const firstText = firstResponse.text();
+
+  try {
+    return JSON.parse(extractJsonText(firstText));
+  } catch {
+    const repairPrompt = `Your previous output was invalid JSON. Return valid JSON only.\nSchema reminder:\n${prompt}\nPrevious output:\n${firstText}`;
+    const repaired = await model.generateContent(repairPrompt);
+    const repairedResponse = await repaired.response;
+    const repairedText = repairedResponse.text();
+    return JSON.parse(extractJsonText(repairedText));
+  }
+}
+
+export async function recommendHybridStacks(vibe, standardOutput, apiKey, { modelName = '' } = {}) {
+  if (!apiKey) {
+    throw new Error('API key is missing.');
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const selectedModel = await getOptimalModel(apiKey, modelName);
+  const model = genAI.getGenerativeModel({ model: selectedModel });
+  const prompt = buildHybridStackPrompt(vibe, standardOutput);
+
+  try {
+    const parsed = await parseHybridStackJsonWithOneRetry(model, prompt);
+    return normalizeHybridStackGuide(parsed, selectedModel);
+  } catch (error) {
+    console.error('Hybrid stack recommendation failed:', error);
+    throw new Error('Hybrid stack recommendation interrupted by model or JSON parsing failure.');
   }
 }

@@ -2,83 +2,104 @@
 
 [English](README.md) | [한국어](README.ko.md)
 
-Vibe-to-Spec Transmuter is an educational assistant that helps non-developers and beginner vibe coders turn vague ideas into structured implementation specs.
+Vibe-to-Spec Transmuter is a beginner-focused requirement structuring assistant for:
 
-This project is being built for the **Intel AI App Creator training program** (beginner-friendly, non-CS audience).
+- non-developers
+- beginner vibe coders
+- non-CS learners
+
+It turns rough ideas into structured specs, supports stack decision guidance, and provides copy-ready handoff outputs.
 
 ## What It Does
 
-1. User writes a rough idea in plain language.
-2. The app converts it into a structured spec format.
-3. User reviews outputs by audience and purpose:
-   - Non-dev view
-   - Dev view
-   - Thinking view
-   - Layer view
-   - Glossary view
+1. User writes a rough request in plain language.
+2. AI converts it to a normalized standard output schema.
+3. User reviews results in dedicated views:
+   - Non-dev
+   - Dev
+   - Tech Choice
+   - Thinking
+   - Layers
+   - Glossary
+4. User can open a combined Prompt/Dev Spec workspace and copy each output independently.
 
-## Current UI/UX (as of current code)
+## Current Key Features
 
-- Beginner-focused light UI (no cyberpunk/neon theme).
-- 3-step progress hints:
-  - Problem input
-  - Structured generation
-  - Review and revise
-- Learning mode clearly separated:
-  - `ON`: enables Thinking tab (assumptions/questions/alternatives)
-  - `OFF`: disables Thinking tab and focuses on quick practical outputs
-- Copy actions now have explicit purpose:
-  - `Antigravity Prompt Copy`: paste into Antigravity for code generation
-  - `Dev Handoff Spec Copy`: share with human developers/teams
-- Footer area includes an external banner link to the creator repository.
+### 1) Structured Spec Generation
 
-## Output Structure
+- Fixed schema normalization (`standard_output`) with compatibility handling.
+- One-time JSON repair retry when model output is malformed.
+- Output artifacts:
+  - `artifacts.nondev_spec_md`
+  - `artifacts.dev_spec_md`
+  - `artifacts.master_prompt`
+  - `layers.L1_thinking`
+  - `glossary`
 
-The app normalizes model output into a fixed schema and generates:
+### 2) Hybrid Tech Choice Guide
 
-- `standard_output` (normalized JSON spec)
-- `artifacts.nondev_spec_md`
-- `artifacts.dev_spec_md`
-- `artifacts.master_prompt`
-- `layers.L1_thinking`
-- `glossary` (beginner/practical support)
+- Fixed decision frames:
+  - Option A: rapid validation frame
+  - Option B: balanced growth frame
+  - Option C: scale/operations frame
+- Dynamic stack candidates are generated per frame from user context.
+- Final recommendation ranking is deterministic in-app using weighted scoring:
+  - Difficulty: 45
+  - Cost: 35
+  - Scalability: 20
+- Includes:
+  - 5-factor inferred profile (budget/timeline/team/users/data sensitivity)
+  - option comparison table
+  - top recommendation + fallback option
+  - copyable "recommended prompt"
 
-## Model Selection Strategy
+### 3) Prompt + Dev Spec Workspace
 
-Model selection is **not single hard-coded runtime usage**.
+- Quick action buttons near tabs:
+  - Prompt
+  - Dev Spec
+- Combined screen shows both outputs at once.
+- Separate copy buttons inside each panel.
 
-- The app queries available Gemini models.
-- It filters models that support `generateContent`.
-- It picks by preference order first, then falls back:
-  - Preference order: `gemini-1.5-flash` -> `gemini-1.5-pro` -> `gemini-1.0-pro` -> `gemini-pro`
-  - Fallback list is used if lookup fails.
+### 4) Model Dropdown (Available Model Candidates)
 
-See `src/lib/gemini.js`.
+- Header includes a model selector dropdown.
+- The dropdown lists available Gemini models fetched from API.
+- Selected model is used for:
+  - main transmutation call
+  - hybrid stack recommendation call
+- If no explicit selection is made, the app still supports fallback model selection.
 
-## API Key Policy (Current)
+### 5) Glossary Navigation
 
-API key handling was tightened to reduce browser-side exposure risk:
+- Flow-stage glossary cards with beginner/practical mode.
+- Term chips in content are clickable and sync with glossary cards.
+- "Locate in content" workflow is supported.
 
-- Storage: **sessionStorage only**
-- TTL: **30 minutes** after last save/use
-- Auto-expire: key is cleared and user is prompted again
-- Legacy cleanup: old localStorage key is removed on app start
-- Local persistence option has been removed
+### 6) Learning Mode
 
-See `src/App.jsx` for exact logic.
+- `ON`: Thinking tab enabled (assumptions/questions/alternatives).
+- `OFF`: Thinking tab disabled for fast practical review.
 
-## Security Note (Important)
+## API Key Policy
 
-This app still uses a **client-direct AI call architecture** for educational MVP speed.
+- Stored in `sessionStorage` only.
+- TTL: 30 minutes.
+- Auto-expire and prompt re-entry on timeout.
+- Legacy `localStorage` key cleanup is applied.
 
-That means:
-- API key is handled in the browser session.
-- Full protection against DevTools-level exposure is not possible in this architecture.
+## Security Note
 
-For production-grade security, migrate to:
-- server-side proxy
-- server-held API key
-- rate limiting + auth + audit controls
+This is still a client-side educational MVP architecture.
+
+- AI calls happen from browser runtime.
+- API key is handled in browser session scope.
+
+For production:
+
+- move to server-side proxy
+- keep API keys on server
+- add auth/rate-limit/audit controls
 
 ## Tech Stack
 
@@ -87,7 +108,7 @@ For production-grade security, migrate to:
 - Tailwind CSS 4
 - Framer Motion
 - `@google/generative-ai`
-- React Markdown + `remark-gfm`
+- `react-markdown` + `remark-gfm`
 
 ## Local Development
 
@@ -97,6 +118,7 @@ npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
 Open:
+
 - `http://127.0.0.1:5173`
 
 ## Scripts
@@ -108,24 +130,16 @@ npm run lint
 npm run preview
 ```
 
-## Deployment
-
-GitHub Pages deployment is configured:
-
-- Workflow: `.github/workflows/deploy.yml`
-- Trigger: push to `main`
-- Publish dir: `dist`
-
 ## Project Structure
 
 ```text
 src/
-  App.jsx         # Main UI, tabs, interaction, API key session policy
-  lib/gemini.js   # Model calls, schema normalization, retry logic
+  App.jsx         # Main UI, tabs, interaction, model dropdown, tech-choice UI
+  lib/gemini.js   # Model calls, schema normalization, retry logic, hybrid stack recommendation
   index.css       # Theme and markdown/table readability styles
   main.jsx        # React entry point
 ```
 
 ## Status
 
-Active educational MVP under iterative UI and workflow refinement.
+Active educational MVP under iterative refinement for beginner-friendly decision support.
