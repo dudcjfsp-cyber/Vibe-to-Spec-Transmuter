@@ -60,3 +60,50 @@ HANDOFF.md 기준으로 이어서 진행해줘.
 기존 기능 회귀 없게 lint/build까지 확인해줘.
 ```
 
+## 7) 아키텍처 이식 장치(제품화 대비) - 2026-02-25 추가
+
+목표: 현재는 교육용(프론트 중심 + 사용자 BYOK) 관점을 유지하고,
+제품화 시 별도 레포 클론에서 API 보안 부위만 얇은 백엔드 프록시로 교체 가능하도록 준비.
+
+### 7-1. 지금 당장 넣을 3가지 장치
+
+1. LLM 호출을 `LLMAdapter` 한 곳으로 집중
+   - 앱 어디에서도 provider SDK/API 직접 호출 금지
+   - UI는 `adapter` 인터페이스만 사용
+   - 프론트 직접호출 -> 백엔드 프록시 전환 시 adapter 구현만 교체
+
+2. 세션 상태를 `SpecState(JSON)` 하나로 고정
+   - 고정 키: `answers`, `current_node_id`, `history`, `version`
+   - 30분 TTL 정책은 유지하되 상태 구조는 고정
+   - 질문 플로우 관련 상태는 단일 상태원천(SSOT)으로 통합
+
+3. 질문팩(동적 질문 엔진) 데이터 분리
+   - 하드코딩 트리 금지
+   - 예: `question_pack_v2.json`
+   - 이후 서버 배포형 질문팩 업데이트(원격 갱신) 가능
+
+### 7-2. 현재 코드 기준 충돌 가능 지점 / 위험 / 완화책
+
+1. `LLMAdapter` 경계가 아직 완전하지 않음 (높음)
+   - 현 상태: UI가 `provider/apiKey/model`을 직접 인지하고 호출 흐름 제어
+   - 위험: 프록시 전환 시 `App.jsx` 수정 범위가 넓어질 수 있음
+   - 완화: App은 `llmAdapter.fetchModels / transmute / recommendStacks`만 호출
+
+2. 모델 캐시 키가 provider 단위만 사용됨 (높음)
+   - 현 상태: `availableModelsByProvider`만 사용
+   - 위험: BYOK에서 키 교체 시 이전 키 기준 모델 목록이 섞일 수 있음
+   - 완화: 캐시 키를 `provider + keyFingerprint` 또는 세션 스코프로 분리
+
+3. `SpecState` 도입 시 이중 상태원천 위험 (중간)
+   - 현 상태: 질문/추천 관련 상태가 `useState`로 다수 분산
+   - 위험: `SpecState`와 개별 state 간 불일치/동기화 버그
+   - 완화: 질문 흐름 상태는 `SpecState` 단일 객체로만 읽고 쓰기
+
+4. 질문팩 데이터화 시 ID 결합 위험 (중간)
+   - 현 상태: 일부 추론/점수 로직이 하드코딩 질문 ID에 결합
+   - 위험: JSON에서 ID 변경 시 계산/렌더 로직 파손
+   - 완화: 질문팩 스키마에 `id`를 계약으로 고정하고 로더에서 검증
+
+5. 질문팩 런타임 로딩 실패 대비 필요 (중간)
+   - 위험: 원격/파일 로딩 실패 시 질문 엔진 비정상
+   - 완화: 스키마 검증 + 로컬 fallback pack + pack `version` 체크 필수
