@@ -58,11 +58,15 @@ const GUIDE_TONE_CLASS_MAP = {
   emerald: 'border-emerald-200 bg-emerald-50 text-emerald-800',
   slate: 'border-slate-200 bg-slate-50 text-slate-700',
 };
+// 확신도(높음/중간/낮음)를 카드 배지 색상으로 매핑합니다.
+// 기술 선택 탭의 "입력 기반 판단 요소(5가지)" 카드에서 사용합니다.
 const CONFIDENCE_BADGE_CLASS_MAP = {
   높음: 'border-emerald-200 text-emerald-700 bg-emerald-50',
   중간: 'border-amber-200 text-amber-700 bg-amber-50',
   default: 'border-slate-200 text-slate-600 bg-slate-50',
 };
+// 동적 스택 추천 상태(성공/로딩/실패/대기)를
+// 같은 UI 패턴으로 표시하기 위한 상태 메타 정보입니다.
 const HYBRID_STACK_STATUS_META = {
   success: {
     className: 'border-emerald-200 text-emerald-700 bg-emerald-50',
@@ -373,10 +377,17 @@ function getStandardOutput(result) {
   return null;
 }
 
+/**
+ * "확신도 텍스트"를 뱃지 스타일 클래스로 변환합니다.
+ * 알 수 없는 값은 default 스타일로 처리합니다.
+ */
 function getConfidenceBadgeClass(confidence) {
   return CONFIDENCE_BADGE_CLASS_MAP[confidence] || CONFIDENCE_BADGE_CLASS_MAP.default;
 }
 
+/**
+ * 하이브리드 스택 추천 상태를 UI 렌더용 메타(클래스/라벨)로 변환합니다.
+ */
 function getHybridStackStatusMeta(status) {
   return HYBRID_STACK_STATUS_META[status] || HYBRID_STACK_STATUS_META.default;
 }
@@ -922,6 +933,11 @@ function App() {
     layers: layerCards.map((card) => [card.title, card.goal, ...(card.lines || [])].join('\n')).join('\n'),
   }), [layerCards, result, thinkingMd]);
 
+  /**
+   * API 키를 기반으로 "현재 계정에서 사용 가능한 모델 후보군"을 조회합니다.
+   * - 후보군이 바뀌면 selectedModel도 유효한 값으로 자동 보정합니다.
+   * - 실패 시 후보군을 비우고 안전하게 fallback 흐름으로 두어 앱을 멈추지 않습니다.
+   */
   const loadModelOptions = useCallback(async (nextApiKey) => {
     if (!nextApiKey) {
       setModelOptions([]);
@@ -1085,6 +1101,10 @@ function App() {
     }
   }, [apiKey, selectedModel]);
 
+  /**
+   * 기술 선택 탭에서 "스택 후보 다시 추천"을 눌렀을 때 재요청합니다.
+   * 이미 생성된 result/입력(vibe)을 재사용하므로 기능 흐름은 동일합니다.
+   */
   const handleRefreshHybridStacks = () => {
     if (!result) return;
     void requestHybridStackGuide(result, vibe);
@@ -1371,6 +1391,9 @@ function App() {
           </div>
         </div>
         <div className="flex items-center gap-4">
+          {/* 모델 선택 드롭다운:
+              - API 키로 조회한 후보군을 보여줍니다.
+              - 여기서 고른 모델은 구조화 생성 + 하이브리드 스택 추천 둘 다에 반영됩니다. */}
           <div className="hidden md:flex items-center gap-2 text-[11px] text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-md">
             <Terminal className="w-3 h-3" />
             <label htmlFor="model-selector" className="whitespace-nowrap">사용 모델:</label>

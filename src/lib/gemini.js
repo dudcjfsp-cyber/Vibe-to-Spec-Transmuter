@@ -1206,6 +1206,8 @@ async function getOptimalModel(apiKey, preferredModel = '') {
     availableModels = await fetchAvailableModels(apiKey);
   }
 
+  // UI에서 모델을 직접 선택한 경우 해당 모델을 우선 사용합니다.
+  // 선택값이 목록에 없으면 아래 우선순위 규칙으로 자연스럽게 fallback됩니다.
   const preferred = toSafeString(preferredModel).toLowerCase();
   if (preferred) {
     const matched = availableModels.find((item) => toSafeString(item).toLowerCase() === preferred);
@@ -1234,6 +1236,7 @@ export async function transmuteVibeToSpec(vibe, apiKey, { showThinking = true, m
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
+  // modelName 전달 시 우선 사용, 미전달/불일치 시 기존 자동 선택 정책을 사용합니다.
   const selectedModel = await getOptimalModel(apiKey, modelName);
   const model = genAI.getGenerativeModel({ model: selectedModel });
 
@@ -1359,6 +1362,7 @@ async function parseHybridStackJsonWithOneRetry(model, prompt) {
   try {
     return JSON.parse(extractJsonText(firstText));
   } catch {
+    // 동적 스택 추천도 본문 생성과 동일하게 JSON 복구 재시도(1회)를 적용합니다.
     const repairPrompt = `Your previous output was invalid JSON. Return valid JSON only.\nSchema reminder:\n${prompt}\nPrevious output:\n${firstText}`;
     const repaired = await model.generateContent(repairPrompt);
     const repairedResponse = await repaired.response;
@@ -1373,6 +1377,7 @@ export async function recommendHybridStacks(vibe, standardOutput, apiKey, { mode
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
+  // 하이브리드 스택 추천 호출도 메인 생성과 같은 모델 선택 정책을 공유합니다.
   const selectedModel = await getOptimalModel(apiKey, modelName);
   const model = genAI.getGenerativeModel({ model: selectedModel });
   const prompt = buildHybridStackPrompt(vibe, standardOutput);
