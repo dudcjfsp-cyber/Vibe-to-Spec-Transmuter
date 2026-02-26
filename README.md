@@ -135,7 +135,7 @@ npm run preview
 ```text
 src/
   App.jsx         # Main UI, tabs, interaction, model dropdown, tech-choice UI
-  lib/gemini.js   # Model calls, schema normalization, retry logic, hybrid stack recommendation
+  lib/llmCore.js  # Model calls, schema normalization, retry logic, hybrid stack recommendation
   index.css       # Theme and markdown/table readability styles
   main.jsx        # React entry point
 ```

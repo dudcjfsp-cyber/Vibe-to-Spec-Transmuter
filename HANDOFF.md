@@ -15,7 +15,7 @@
 
 ## 2) 핵심 변경 파일
 
-- `src/lib/gemini.js`
+- `src/lib/llmCore.js`
   - `SUPPORTED_MODEL_PROVIDERS` 추가
   - provider 정규화/표시명 유틸 추가
   - provider별 모델 조회/생성 호출 분기 로직 추가

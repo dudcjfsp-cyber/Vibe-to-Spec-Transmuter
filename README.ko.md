@@ -135,7 +135,7 @@ npm run preview
 ```text
 src/
   App.jsx         # 메인 UI, 탭, 모델 드롭다운, 기술 선택 화면
-  lib/gemini.js   # 모델 호출, 스키마 정규화, 재시도, 하이브리드 스택 추천
+  lib/llmCore.js  # 모델 호출, 스키마 정규화, 재시도, 하이브리드 스택 추천
   index.css       # 테마, 마크다운/테이블 가독성 스타일
   main.jsx        # React 엔트리
 ```
