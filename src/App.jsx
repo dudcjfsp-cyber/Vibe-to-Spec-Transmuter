@@ -18,7 +18,7 @@ import {
   fetchAvailableModels,
   SUPPORTED_MODEL_PROVIDERS,
   getProviderDisplayName,
-} from './lib/gemini';
+} from './lib/llmAdapter';
 
 // -------------------------------------------------------
 // 전역 상수
