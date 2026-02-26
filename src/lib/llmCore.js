@@ -670,163 +670,263 @@ function buildImpactMarkdown(impact) {
   ].join('\n');
 }
 
-/**
- * 요청문 변환 결과(원문/짧은/표준/상세)를 출력합니다.
- */
-function buildRequestTransformMarkdown(requests) {
+function toMarkdownTableCell(value, fallback = '-') {
+  const safe = toSafeString(value, fallback) || fallback;
+  return safe.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+}
+
+function buildInputFieldChecklistMarkdown(fields) {
+  if (!fields.length) return '- 준비할 입력 정보가 아직 정의되지 않았습니다.';
+  return fields
+    .map((field) => {
+      const name = field[K.NAME] || '이름 미정';
+      const type = field[K.TYPE] || '-';
+      const example = field[K.EXAMPLE] || '-';
+      return `- ${name}: ${example} (타입: ${type})`;
+    })
+    .join('\n');
+}
+
+function buildPermissionSummaryMarkdown(permissionMatrix) {
+  if (!permissionMatrix.length) return '- 역할별 권한이 아직 정의되지 않았습니다.';
+  return permissionMatrix
+    .map((rule) => {
+      const role = rule[K.ROLE] || '역할 미정';
+      return `- ${role}: 조회 ${boolToMark(rule[K.READ])} / 생성 ${boolToMark(rule[K.CREATE])} / 수정 ${boolToMark(rule[K.UPDATE])} / 삭제 ${boolToMark(rule[K.DELETE])}`;
+    })
+    .join('\n');
+}
+
+function buildInputFieldTableMarkdown(fields) {
+  const header = [
+    '| Field | Type | Example |',
+    '| --- | --- | --- |',
+  ];
+  if (!fields.length) return [...header, '| (미정) | - | - |'].join('\n');
+
   return [
-    `- 원문: ${requests[K.RAW_REQUEST] || '-'}`,
-    `- 짧은 요청: ${requests[K.SHORT_REQUEST] || '-'}`,
-    `- 표준 요청: ${requests[K.STANDARD_REQUEST] || '-'}`,
-    `- 상세 요청: ${requests[K.DETAILED_REQUEST] || '-'}`,
+    ...header,
+    ...fields.map((field) => [
+      `| ${toMarkdownTableCell(field[K.NAME], '(미정)')}`,
+      `${toMarkdownTableCell(field[K.TYPE])}`,
+      `${toMarkdownTableCell(field[K.EXAMPLE])} |`,
+    ].join(' | ')),
   ].join('\n');
 }
 
-/**
- * 초보자에게 자주 필요한 개발 용어 간단 가이드입니다.
- * 용어 네비게이터와 본문 양쪽에서 재사용됩니다.
- */
-function buildCoreConceptGuideMarkdown() {
+function buildPermissionMatrixTableMarkdown(permissionMatrix) {
+  const header = [
+    '| Role | Read | Create | Update | Delete | Notes |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  if (!permissionMatrix.length) return [...header, '| (미정) | - | - | - | - | 권한 정책 정의 필요 |'].join('\n');
+
   return [
-    '- Parsing: 사용자가 입력한 문장에서 필요한 값을 규칙대로 뽑아내는 단계',
-    '- Schema: 데이터 필드 이름/타입/필수 여부를 정의한 약속',
-    '- JSON: 시스템끼리 데이터를 주고받을 때 쓰는 구조화된 텍스트 형식',
-    '- Validation: 입력값이 스키마 규칙을 지키는지 검사하는 과정',
+    ...header,
+    ...permissionMatrix.map((rule) => [
+      `| ${toMarkdownTableCell(rule[K.ROLE], '(미정)')}`,
+      `${boolToMark(rule[K.READ])}`,
+      `${boolToMark(rule[K.CREATE])}`,
+      `${boolToMark(rule[K.UPDATE])}`,
+      `${boolToMark(rule[K.DELETE])}`,
+      `${toMarkdownTableCell(rule[K.NOTES])} |`,
+    ].join(' | ')),
+  ].join('\n');
+}
+
+function buildDeveloperAcceptanceCriteriaMarkdown(spec) {
+  const criteria = [];
+  const problemFrame = spec[K.PROBLEM_FRAME] || {};
+  const mustFeatures = spec[K.FEATURES]?.[K.MUST] || [];
+  const flow = spec[K.FLOW] || [];
+  const fields = spec[K.INPUT_FIELDS] || [];
+  const permissionMatrix = spec[K.PERMISSIONS] || [];
+
+  criteria.push(`핵심 사용자("${problemFrame[K.WHO] || '-'}")가 핵심 작업("${problemFrame[K.WHAT] || '-'}")을 완료할 수 있어야 합니다.`);
+  criteria.push(`완료 판정은 성공기준("${problemFrame[K.SUCCESS] || '-'}")을 충족해야 합니다.`);
+
+  if (mustFeatures.length) {
+    mustFeatures.forEach((feature, idx) => {
+      criteria.push(`Must ${idx + 1}: ${feature}`);
+    });
+  } else {
+    criteria.push('Must 기능이 비어 있습니다. 최소 1개 이상의 필수 기능을 확정해야 합니다.');
+  }
+
+  criteria.push(`사용자 흐름 5단계를 순서대로 수행할 수 있어야 합니다. (현재 정의: ${flow.length}단계)`);
+
+  if (fields.length) {
+    fields.forEach((field) => {
+      criteria.push(`입력 필드 "${field[K.NAME] || '미정'}"는 타입 "${field[K.TYPE] || '-'}" 검증을 통과해야 합니다.`);
+    });
+  } else {
+    criteria.push('입력 데이터 필드 정의가 없어 유효성 검증을 완료할 수 없습니다.');
+  }
+
+  if (permissionMatrix.length) {
+    permissionMatrix.forEach((rule) => {
+      criteria.push(`역할 "${rule[K.ROLE] || '미정'}" 권한은 조회 ${boolToMark(rule[K.READ])}/생성 ${boolToMark(rule[K.CREATE])}/수정 ${boolToMark(rule[K.UPDATE])}/삭제 ${boolToMark(rule[K.DELETE])} 정책을 만족해야 합니다.`);
+    });
+  } else {
+    criteria.push('역할별 CRUD 권한 정책 정의가 필요합니다.');
+  }
+
+  criteria.push('오류 처리에서 누락 입력/권한 없음/유효성 실패 케이스를 사용자 메시지와 함께 처리해야 합니다.');
+  criteria.push(`테스트 시나리오 ${spec[K.TESTS]?.length || 0}개를 모두 통과해야 합니다.`);
+  return markdownOrderedList(criteria, '1. 수용 기준 정의 필요');
+}
+
+function buildDeveloperImplementationChecklistMarkdown(spec) {
+  const checklist = [
+    `필수 기능 ${spec[K.FEATURES]?.[K.MUST]?.length || 0}개 구현`,
+    '입력 데이터 계약 기준으로 validation 규칙 분리',
+    '권한 규칙 기준으로 authorization 분기 분리',
+    '누락 입력/권한 오류/유효성 실패 공통 에러 처리 구현',
+    '테스트 시나리오 기반 검증 완료',
+  ];
+
+  const warnings = spec[K.COMPLETENESS]?.[K.WARNINGS] || [];
+  warnings.forEach((warning, idx) => {
+    checklist.push(`누락 경고 조치 ${idx + 1}: ${warning}`);
+  });
+
+  const todayTasks = spec[K.NEXT] || [];
+  todayTasks.forEach((item, idx) => {
+    checklist.push(`오늘 우선 작업 ${idx + 1}: ${item}`);
+  });
+
+  return markdownOrderedList(checklist, '1. 구현 체크리스트 정의 필요');
+}
+
+function buildRequestHandoffMarkdown(requests) {
+  return [
+    '### 표준 요청문',
+    '```text',
+    requests[K.STANDARD_REQUEST] || '-',
+    '```',
+    '',
+    '### 상세 요청문',
+    '```text',
+    requests[K.DETAILED_REQUEST] || '-',
+    '```',
   ].join('\n');
 }
 
 /**
  * 비전공자 탭용 마크다운 문서를 조립합니다.
- * 초보자가 "지금 뭐가 필요한지" 한눈에 보이도록 순서를 고정했습니다.
+ * 초보자가 의사결정/실행 항목을 빠르게 확인하도록 구성합니다.
  */
 function buildNonDevSpecMarkdown(spec) {
   return [
-    '# 표준 출력 스키마(초보 친화형)',
+    '# 비전공자 설명서 (결정/실행 중심)',
     '',
-    '## 한 줄 요약 (이 앱이 뭘 하는지)',
-    spec[K.SUMMARY],
+    '## 이 프로젝트가 하는 일',
+    `- ${spec[K.SUMMARY]}`,
     '',
-    '## 문제정의 5칸',
+    '## 누구의 어떤 문제를 푸는지',
     buildProblemFrameCardsMarkdown(spec[K.PROBLEM_FRAME]),
     '',
-    '## 인터뷰 모드 (필요 정보 질문 자동 생성)',
-    '### 필요 정보 질문 3개',
-    markdownOrderedList(spec[K.INTERVIEW][K.FOLLOW_UP]),
-    '',
-    '## 핵심 용어 빠른 가이드',
-    buildCoreConceptGuideMarkdown(),
-    '',
-    '## 사용자/역할 (Admin, Member 등)',
+    '## 대상 사용자/역할',
     buildUsersSectionMarkdown(spec[K.ROLES]),
     '',
-    '## 핵심 기능 목록 (Must / Nice-to-have)',
-    '### Must',
-    markdownList(spec[K.FEATURES][K.MUST]),
+    '## 이번 버전 핵심 기능 (Must)',
+    markdownOrderedList(spec[K.FEATURES][K.MUST], '1. 필수 기능 정의 필요'),
     '',
-    '### Nice-to-have',
-    markdownList(spec[K.FEATURES][K.NICE]),
-    '',
-    '## 화면/흐름 (사용자 행동 순서 5단계)',
+    '## 사용자 흐름 (5단계)',
     markdownOrderedList(spec[K.FLOW]),
     '',
-    '## 입력 데이터(필드) (이름/타입/예시)',
-    buildInputFieldCardsMarkdown(spec[K.INPUT_FIELDS]),
+    '## 준비해야 할 입력 정보',
+    buildInputFieldChecklistMarkdown(spec[K.INPUT_FIELDS]),
     '',
-    '## 권한 규칙 (역할별 박스)',
-    buildPermissionCardsMarkdown(spec[K.PERMISSIONS]),
+    '## 역할별 권한 요약',
+    buildPermissionSummaryMarkdown(spec[K.PERMISSIONS]),
     '',
-    '## 예외/모호한 점 (부족한 정보 + 질문 3개)',
+    '## 지금 결정이 필요한 항목',
     '### 부족한 정보',
     markdownList(spec[K.AMBIGUITIES][K.MISSING]),
     '',
     '### 확인 질문 3개',
     markdownOrderedList(spec[K.AMBIGUITIES][K.QUESTIONS]),
     '',
-    '## 리스크/함정 (3개)',
+    '## 리스크/함정',
     markdownOrderedList(spec[K.RISKS]),
     '',
-    '## 테스트 시나리오 (3개)',
-    markdownOrderedList(spec[K.TESTS]),
+    '## 오늘 바로 할 일 3개',
+    markdownOrderedList(spec[K.NEXT]),
     '',
-    '## 수정요청 변환',
-    buildRequestTransformMarkdown(spec[K.REQUEST_CONVERTER]),
-    '',
-    '## 변경 영향도',
-    buildImpactMarkdown(spec[K.IMPACT]),
-    '',
-    '## 완성도 진단',
-    `- 점수: ${spec[K.COMPLETENESS][K.SCORE]} / 100`,
+    '## 진행 상태',
+    `- 완성도 점수: ${spec[K.COMPLETENESS][K.SCORE]} / 100`,
     '- 누락 경고',
     markdownList(spec[K.COMPLETENESS][K.WARNINGS]),
     '',
-    '## 레이어 가이드 (L1~L5)',
+    '## 참고: L1~L5 레이어',
     buildLayerGuideMarkdown(spec[K.LAYER_GUIDE]),
-    '',
-    '## 다음 단계 (오늘 할 일 3개)',
-    markdownOrderedList(spec[K.NEXT]),
   ].join('\n');
 }
 
 /**
  * 개발자 탭용 마크다운 문서를 조립합니다.
- * 구현/검증에 필요한 정보를 빠짐없이 모아둡니다.
+ * 구현/검증에 바로 쓸 수 있는 전달 문서 형태로 구성합니다.
  */
 function buildDevSpecMarkdown(spec) {
   return [
-    '# 개발자 구현 스펙 (표준 스키마 기반)',
+    '# 개발자 전달용 구현 스펙 (Execution Ready)',
     '',
-    '## Product Intent',
-    `- 요약: ${spec[K.SUMMARY]}`,
+    '## 1) Product Intent',
+    `- Summary: ${spec[K.SUMMARY]}`,
     '',
-    '## Core Terms',
-    buildCoreConceptGuideMarkdown(),
-    '',
-    '## Problem Frame',
+    '## 2) Problem Frame',
     buildProblemFrameCardsMarkdown(spec[K.PROBLEM_FRAME]),
     '',
-    '## Roles',
+    '## 3) Roles',
     buildUsersSectionMarkdown(spec[K.ROLES]),
     '',
-    '## Scope',
+    '## 4) Scope',
     '### Must',
     markdownList(spec[K.FEATURES][K.MUST]),
     '',
     '### Nice-to-have',
     markdownList(spec[K.FEATURES][K.NICE]),
     '',
-    '## UX Flow (5 steps)',
+    '## 5) UX Flow (5 steps)',
     markdownOrderedList(spec[K.FLOW]),
     '',
-    '## Data Contract',
-    buildInputFieldCardsMarkdown(spec[K.INPUT_FIELDS]),
+    '## 6) Data Contract',
+    buildInputFieldTableMarkdown(spec[K.INPUT_FIELDS]),
     '',
-    '## Authorization Cards',
-    buildPermissionCardsMarkdown(spec[K.PERMISSIONS]),
+    '## 7) Authorization Matrix',
+    buildPermissionMatrixTableMarkdown(spec[K.PERMISSIONS]),
     '',
-    '## Open Questions',
+    '## 8) Acceptance Criteria',
+    buildDeveloperAcceptanceCriteriaMarkdown(spec),
+    '',
+    '## 9) Open Questions',
+    '### Missing Information',
+    markdownList(spec[K.AMBIGUITIES][K.MISSING]),
+    '',
+    '### Clarification Questions',
     markdownOrderedList(spec[K.AMBIGUITIES][K.QUESTIONS]),
     '',
-    '## Risks',
+    '## 10) Risks & Impact',
+    '### Risks',
     markdownOrderedList(spec[K.RISKS]),
     '',
-    '## Test Scenarios',
-    markdownOrderedList(spec[K.TESTS]),
-    '',
-    '## Request Transformer Output',
-    buildRequestTransformMarkdown(spec[K.REQUEST_CONVERTER]),
-    '',
-    '## Impact Preview',
+    '### Impact Preview',
     buildImpactMarkdown(spec[K.IMPACT]),
     '',
-    '## Completeness',
+    '## 11) Test Plan',
+    markdownOrderedList(spec[K.TESTS]),
+    '',
+    '## 12) Implementation Checklist',
+    buildDeveloperImplementationChecklistMarkdown(spec),
+    '',
+    '## 13) Copy-ready Request Blocks',
+    buildRequestHandoffMarkdown(spec[K.REQUEST_CONVERTER]),
+    '',
+    '## 14) Definition of Done Snapshot',
     `- Score: ${spec[K.COMPLETENESS][K.SCORE]}/100`,
+    '- Remaining Warnings',
     markdownList(spec[K.COMPLETENESS][K.WARNINGS]),
-    '',
-    '## Layer Guide',
-    buildLayerGuideMarkdown(spec[K.LAYER_GUIDE]),
-    '',
-    '## Today Plan',
-    markdownOrderedList(spec[K.NEXT]),
   ].join('\n');
 }
 
