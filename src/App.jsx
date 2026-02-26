@@ -19,6 +19,12 @@ import {
   SUPPORTED_MODEL_PROVIDERS,
   getProviderDisplayName,
 } from './lib/llmAdapter';
+import {
+  appendSpecStateHistory,
+  createEmptySpecState,
+  loadSpecStateFromSession,
+  updateSpecStateInSession,
+} from './lib/specState';
 
 // -------------------------------------------------------
 // 전역 상수
@@ -336,6 +342,30 @@ function getStoredApiKey(provider) {
   }
 
   return key;
+}
+
+function shadowWriteSpecState({
+  type,
+  payload = {},
+  answersPatch = null,
+  currentNodeId = '',
+}) {
+  updateSpecStateInSession((previous) => {
+    const hasAnswerPatch = answersPatch && typeof answersPatch === 'object' && !Array.isArray(answersPatch);
+    const next = {
+      ...previous,
+      answers: hasAnswerPatch
+        ? { ...previous.answers, ...answersPatch }
+        : previous.answers,
+      current_node_id: currentNodeId || previous.current_node_id,
+    };
+
+    return appendSpecStateHistory(next, {
+      type: String(type || '').trim() || 'event',
+      ts: Date.now(),
+      payload: payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {},
+    });
+  });
 }
 
 /**
@@ -1035,6 +1065,13 @@ function App() {
     clearLegacyGeminiStorage();
   }, []);
 
+  // 질문 엔진 이식 대비: SpecState 고정 스키마를 세션에 초기화/정규화합니다.
+  useEffect(() => {
+    const restored = loadSpecStateFromSession();
+    const seed = restored?.version ? restored : createEmptySpecState();
+    updateSpecStateInSession(() => seed);
+  }, []);
+
   // 제공자 선택값을 세션에 저장하고, 해당 제공자의 키를 자동 로드합니다.
   useEffect(() => {
     persistProviderToSession(apiProvider);
@@ -1045,6 +1082,19 @@ function App() {
     setModelOptions([]);
     setSelectedModel('');
     if (!restoredKey) setIsSettingsOpen(true);
+
+    shadowWriteSpecState({
+      type: 'provider_changed',
+      currentNodeId: 'provider_selected',
+      answersPatch: {
+        api_provider: apiProvider,
+        api_key_ready: Boolean(restoredKey),
+      },
+      payload: {
+        provider: apiProvider,
+        restored_key: Boolean(restoredKey),
+      },
+    });
   }, [apiProvider]);
 
   // API 키가 준비되면 사용 가능한 모델 후보군을 로드합니다.
@@ -1069,6 +1119,12 @@ function App() {
       setApiKey('');
       setActiveModel('OFFLINE');
       setIsSettingsOpen(true);
+      shadowWriteSpecState({
+        type: 'api_key_expired',
+        currentNodeId: 'api_key_expired',
+        answersPatch: { api_key_ready: false },
+        payload: { provider: apiProvider, trigger: 'ttl_check' },
+      });
       return;
     }
 
@@ -1078,6 +1134,12 @@ function App() {
       setApiKey('');
       setActiveModel('OFFLINE');
       setIsSettingsOpen(true);
+      shadowWriteSpecState({
+        type: 'api_key_expired',
+        currentNodeId: 'api_key_expired',
+        answersPatch: { api_key_ready: false },
+        payload: { provider: apiProvider, trigger: 'ttl_timer' },
+      });
     }, remainingMs);
 
     return () => window.clearTimeout(timerId);
@@ -1146,6 +1208,16 @@ function App() {
     setApiKey(key);
     setIsSettingsOpen(false);
     setTempKey('');
+
+    shadowWriteSpecState({
+      type: 'api_key_saved',
+      currentNodeId: 'api_key_ready',
+      answersPatch: {
+        api_provider: apiProvider,
+        api_key_ready: true,
+      },
+      payload: { provider: apiProvider },
+    });
   };
 
   const requestHybridStackGuide = useCallback(async (nextResult, nextVibe) => {
@@ -1153,6 +1225,14 @@ function App() {
     if (!apiKey || !standardPayload) {
       setHybridStackGuide(null);
       setHybridStackGuideStatus('error');
+      shadowWriteSpecState({
+        type: 'hybrid_stack_unavailable',
+        currentNodeId: 'hybrid_stack_error',
+        payload: {
+          provider: apiProvider,
+          reason: 'missing_input_or_key',
+        },
+      });
       return;
     }
 
@@ -1164,9 +1244,28 @@ function App() {
       });
       setHybridStackGuide(guide);
       setHybridStackGuideStatus('success');
+      shadowWriteSpecState({
+        type: 'hybrid_stack_success',
+        currentNodeId: 'hybrid_stack_success',
+        answersPatch: {
+          last_hybrid_model: String(guide?.model || selectedModel || ''),
+        },
+        payload: {
+          provider: apiProvider,
+          model: String(guide?.model || selectedModel || ''),
+        },
+      });
     } catch {
       setHybridStackGuide(null);
       setHybridStackGuideStatus('error');
+      shadowWriteSpecState({
+        type: 'hybrid_stack_error',
+        currentNodeId: 'hybrid_stack_error',
+        payload: {
+          provider: apiProvider,
+          model: String(selectedModel || ''),
+        },
+      });
     }
   }, [apiKey, apiProvider, selectedModel]);
 
@@ -1187,6 +1286,11 @@ function App() {
     if (!vibe.trim()) return;
     if (!apiKey) {
       setIsSettingsOpen(true);
+      shadowWriteSpecState({
+        type: 'transmute_blocked_missing_key',
+        currentNodeId: 'api_key_required',
+        payload: { provider: apiProvider },
+      });
       return;
     }
 
@@ -1198,6 +1302,12 @@ function App() {
       setApiKey('');
       setActiveModel('OFFLINE');
       setIsSettingsOpen(true);
+      shadowWriteSpecState({
+        type: 'transmute_blocked_expired_key',
+        currentNodeId: 'api_key_expired',
+        answersPatch: { api_key_ready: false },
+        payload: { provider: apiProvider },
+      });
       return;
     }
 
@@ -1208,6 +1318,19 @@ function App() {
     setResult(null);
     setHybridStackGuide(null);
     setHybridStackGuideStatus('idle');
+    shadowWriteSpecState({
+      type: 'transmute_started',
+      currentNodeId: 'transmute_started',
+      answersPatch: {
+        source_vibe: vibe.trim(),
+        api_provider: apiProvider,
+      },
+      payload: {
+        provider: apiProvider,
+        model: String(selectedModel || ''),
+        show_thinking: showThinking,
+      },
+    });
 
     try {
       const generated = await transmuteVibeToSpec(vibe, apiKey, {
@@ -1231,6 +1354,18 @@ function App() {
       setCopiedGuidePrompt(false);
       setPromptSpecFocus('prompt');
       setStatus('success');
+      shadowWriteSpecState({
+        type: 'transmute_success',
+        currentNodeId: 'transmute_success',
+        answersPatch: {
+          last_model: String(generated?.model || selectedModel || ''),
+          api_provider: apiProvider,
+        },
+        payload: {
+          provider: apiProvider,
+          model: String(generated?.model || selectedModel || ''),
+        },
+      });
       void requestHybridStackGuide(generated, vibe);
     } catch {
       console.error('Transmutation failed: Neural link disruption detected.');
@@ -1238,6 +1373,14 @@ function App() {
       setActiveModel('LINK FAILURE');
       setHybridStackGuide(null);
       setHybridStackGuideStatus('error');
+      shadowWriteSpecState({
+        type: 'transmute_error',
+        currentNodeId: 'transmute_error',
+        payload: {
+          provider: apiProvider,
+          model: String(selectedModel || ''),
+        },
+      });
     }
   };
 
