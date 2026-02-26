@@ -354,27 +354,96 @@ function defaultLayerGuide() {
  * 레이어 가이드를 5개 고정 구조로 정규화합니다.
  * 값이 빠지면 defaultLayerGuide의 내용을 채웁니다.
  */
+function extractLayerId(value) {
+  const match = toSafeString(value).toUpperCase().match(/L[1-5]/);
+  return match ? match[0] : '';
+}
+
+function collectLayerIds(value) {
+  const matches = toSafeString(value).toUpperCase().match(/L[1-5]/g) || [];
+  return Array.from(new Set(matches));
+}
+
+function parseLayerGuideBlob(text) {
+  const source = toSafeString(text).replace(/\r/g, '\n');
+  if (!source) return [];
+
+  const marker = /(L[1-5])\s*[:：-]/g;
+  const matches = Array.from(source.matchAll(marker));
+  if (matches.length < 2) return [];
+
+  const parsed = [];
+  matches.forEach((match, idx) => {
+    const currentLayer = String(match[1] || '').toUpperCase();
+    const start = (match.index ?? 0) + match[0].length;
+    const end = idx + 1 < matches.length ? (matches[idx + 1].index ?? source.length) : source.length;
+    const body = source.slice(start, end).replace(/\s+/g, ' ').trim();
+    if (!body) return;
+    parsed.push({ layer: currentLayer, goal: body });
+  });
+
+  return parsed;
+}
+
 function normalizeLayerGuide(value) {
   const defaults = defaultLayerGuide();
   const source = Array.isArray(value) ? value : [];
-  const normalized = source
-    .map((item, idx) => {
-      const safeItem = isObject(item) ? item : {};
-      const fallback = defaults[idx] || {};
-      return {
-        [K.LAYER]: toSafeString(safeItem[K.LAYER] ?? safeItem.layer, fallback[K.LAYER] || `L${idx + 1}`),
-        [K.GOAL]: toSafeString(safeItem[K.GOAL] ?? safeItem.goal, fallback[K.GOAL] || '목표 정의 필요'),
-        [K.OUTPUT]: toSafeString(safeItem[K.OUTPUT] ?? safeItem.output, fallback[K.OUTPUT] || '출력 정의 필요'),
-      };
-    })
-    .filter((item) => item[K.LAYER] || item[K.GOAL] || item[K.OUTPUT])
-    .slice(0, 5);
+  const layerMap = new Map();
 
-  while (normalized.length < 5) {
-    normalized.push(defaults[normalized.length]);
-  }
+  const fallbackGoalText = '목표 정의 필요';
+  const fallbackOutputText = '출력 정의 필요';
 
-  return normalized;
+  const getFallbackByLayer = (layerId, byIndexFallback) => {
+    const matched = defaults.find((item) => extractLayerId(item[K.LAYER]) === layerId);
+    return matched || byIndexFallback || {};
+  };
+
+  const upsertLayer = (layerId, goal, output, fallback) => {
+    const normalizedLayer = extractLayerId(layerId);
+    if (!normalizedLayer) return;
+    if (layerMap.has(normalizedLayer)) return;
+
+    layerMap.set(normalizedLayer, {
+      [K.LAYER]: normalizedLayer,
+      [K.GOAL]: toSafeString(goal, fallback[K.GOAL] || fallbackGoalText),
+      [K.OUTPUT]: toSafeString(output, fallback[K.OUTPUT] || fallbackOutputText),
+    });
+  };
+
+  source.forEach((item, idx) => {
+    const safeItem = isObject(item) ? item : {};
+    const fallback = defaults[idx] || defaults[0] || {};
+    const rawLayer = toSafeString(safeItem[K.LAYER] ?? safeItem.layer);
+    const rawGoal = toSafeString(safeItem[K.GOAL] ?? safeItem.goal);
+    const rawOutput = toSafeString(safeItem[K.OUTPUT] ?? safeItem.output);
+
+    const layerIds = collectLayerIds(rawLayer);
+    if (layerIds.length === 1) {
+      const fallbackByLayer = getFallbackByLayer(layerIds[0], fallback);
+      upsertLayer(layerIds[0], rawGoal, rawOutput, fallbackByLayer);
+      return;
+    }
+
+    // Recover from a combined OpenAI response such as "L1|L2|..." + "L1: ... L2: ...".
+    const blobCandidate = [rawLayer, rawGoal, rawOutput].filter(Boolean).join('\n');
+    const explodedLayers = parseLayerGuideBlob(blobCandidate);
+    if (explodedLayers.length > 0) {
+      explodedLayers.forEach((entry) => {
+        const fallbackByLayer = getFallbackByLayer(entry.layer, fallback);
+        upsertLayer(entry.layer, entry.goal, fallbackByLayer[K.OUTPUT], fallbackByLayer);
+      });
+      return;
+    }
+
+    const fallbackLayer = extractLayerId(fallback[K.LAYER]) || `L${Math.min(idx + 1, 5)}`;
+    const fallbackByLayer = getFallbackByLayer(fallbackLayer, fallback);
+    upsertLayer(fallbackLayer, rawGoal, rawOutput, fallbackByLayer);
+  });
+
+  return defaults.map((fallback, idx) => {
+    const layer = extractLayerId(fallback[K.LAYER]) || `L${idx + 1}`;
+    return layerMap.get(layer) || fallback;
+  });
 }
 
 /**
@@ -1696,3 +1765,4 @@ export async function recommendHybridStacks(
     throw new Error('Hybrid stack recommendation interrupted by model or JSON parsing failure.');
   }
 }
+
