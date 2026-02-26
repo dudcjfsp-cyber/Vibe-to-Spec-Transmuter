@@ -192,11 +192,7 @@ OUTPUT RULES (MUST FOLLOW):
 `;
 
 // 메모리 캐시: 이미 조회한 모델 목록을 저장해 중복 네트워크 호출을 줄입니다.
-const availableModelsByProvider = {
-  gemini: [],
-  openai: [],
-  anthropic: [],
-};
+const availableModelsCache = new Map();
 
 /**
  * 값이 "객체"인지 검사합니다.
@@ -213,6 +209,39 @@ function isObject(value) {
  */
 function toSafeString(value, fallback = '') {
   return typeof value === 'string' ? value.trim() : fallback;
+}
+
+function getApiKeyFingerprint(apiKey) {
+  const normalized = toSafeString(apiKey);
+  if (!normalized) return 'empty';
+
+  // Cache keys should not store raw API keys.
+  let hash = 0;
+  for (let idx = 0; idx < normalized.length; idx += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(idx)) | 0;
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function getModelCacheKey(provider, apiKey) {
+  const normalizedProvider = normalizeProvider(provider);
+  const keyFingerprint = getApiKeyFingerprint(apiKey);
+  return `${normalizedProvider}:${keyFingerprint}`;
+}
+
+function getCachedModels(provider, apiKey) {
+  const cacheKey = getModelCacheKey(provider, apiKey);
+  const cached = availableModelsCache.get(cacheKey);
+  return Array.isArray(cached) ? cached : [];
+}
+
+function setCachedModels(provider, apiKey, models) {
+  const sanitized = Array.isArray(models)
+    ? models.map((item) => toSafeString(item)).filter(Boolean)
+    : [];
+  if (!sanitized.length) return;
+  const cacheKey = getModelCacheKey(provider, apiKey);
+  availableModelsCache.set(cacheKey, sanitized);
 }
 
 function normalizeProvider(provider) {
@@ -1435,6 +1464,9 @@ export async function fetchAvailableModels(apiKey, { provider = DEFAULT_PROVIDER
   const normalizedProvider = normalizeProvider(provider);
   if (!apiKey) return getDefaultModels(normalizedProvider);
 
+  const cachedModels = getCachedModels(normalizedProvider, apiKey);
+  if (cachedModels.length > 0) return cachedModels;
+
   try {
     let models = [];
     if (normalizedProvider === 'gemini') {
@@ -1447,14 +1479,16 @@ export async function fetchAvailableModels(apiKey, { provider = DEFAULT_PROVIDER
 
     const sortedModels = sortModelsByPreference(models, normalizedProvider);
     if (sortedModels.length > 0) {
-      availableModelsByProvider[normalizedProvider] = sortedModels;
+      setCachedModels(normalizedProvider, apiKey, sortedModels);
       return sortedModels;
     }
   } catch {
     // Avoid exposing API key details.
   }
 
-  return getDefaultModels(normalizedProvider);
+  const fallbackModels = getDefaultModels(normalizedProvider);
+  setCachedModels(normalizedProvider, apiKey, fallbackModels);
+  return fallbackModels;
 }
 
 /**
@@ -1462,11 +1496,10 @@ export async function fetchAvailableModels(apiKey, { provider = DEFAULT_PROVIDER
  */
 async function getOptimalModel(apiKey, preferredModel = '', provider = DEFAULT_PROVIDER) {
   const normalizedProvider = normalizeProvider(provider);
-  if ((availableModelsByProvider[normalizedProvider] || []).length === 0) {
-    availableModelsByProvider[normalizedProvider] = await fetchAvailableModels(apiKey, { provider: normalizedProvider });
+  let availableModels = getCachedModels(normalizedProvider, apiKey);
+  if (availableModels.length === 0) {
+    availableModels = await fetchAvailableModels(apiKey, { provider: normalizedProvider });
   }
-
-  const availableModels = availableModelsByProvider[normalizedProvider] || [];
 
   // UI에서 모델을 직접 선택한 경우 해당 모델을 우선 사용합니다.
   // 선택값이 목록에 없으면 아래 우선순위 규칙으로 자연스럽게 fallback됩니다.
