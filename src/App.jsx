@@ -1942,7 +1942,7 @@ function App() {
                             {copiedMaster ? <><Check className="w-4 h-4" />복사됨</> : <><Copy className="w-4 h-4" />복사</>}
                           </button>
                         </div>
-                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 max-h-[420px] overflow-auto">
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 max-h-[420px] overflow-y-auto overflow-x-hidden">
                           <pre className="m-0 whitespace-pre-wrap break-words text-xs md:text-sm leading-relaxed text-slate-800">{masterPromptText || '생성된 프롬프트가 없습니다. 먼저 사고 구조화를 실행해주세요.'}</pre>
                         </div>
                       </article>
@@ -1961,7 +1961,7 @@ function App() {
                             {copied ? <><Check className="w-4 h-4" />복사됨</> : <><Copy className="w-4 h-4" />복사</>}
                           </button>
                         </div>
-                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 max-h-[420px] overflow-auto">
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 max-h-[420px] overflow-y-auto overflow-x-hidden">
                           <pre className="m-0 whitespace-pre-wrap break-words text-xs md:text-sm leading-relaxed text-slate-800">{devSpecText || '생성된 개발 스펙이 없습니다. 먼저 사고 구조화를 실행해주세요.'}</pre>
                         </div>
                       </article>

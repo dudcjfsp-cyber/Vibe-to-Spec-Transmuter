@@ -59,6 +59,8 @@ body {
 
 .prose-cyber p {
   @apply text-slate-700 mb-4 leading-relaxed;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .prose-cyber ul,
@@ -68,6 +70,8 @@ body {
 
 .prose-cyber li {
   @apply mb-1;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* 테이블이 들어오면 칸이 맞게 읽히도록 셀 스타일을 고정합니다. */
@@ -81,10 +85,14 @@ body {
 
 .prose-cyber th {
   @apply border border-slate-200 px-3 py-2 text-left font-semibold text-slate-700;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .prose-cyber td {
   @apply border border-slate-200 px-3 py-2 align-top text-slate-700;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .prose-cyber code {
@@ -92,11 +100,18 @@ body {
 }
 
 .prose-cyber pre {
-  @apply bg-white border border-slate-200 p-4 rounded-md mb-4 overflow-x-auto;
+  @apply bg-white border border-slate-200 p-4 rounded-md mb-4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-x: hidden;
 }
 
 .prose-cyber pre code {
   @apply bg-transparent px-0 text-slate-700;
+  white-space: inherit;
+  overflow-wrap: inherit;
+  word-break: inherit;
 }
 
 .prose-cyber strong {
