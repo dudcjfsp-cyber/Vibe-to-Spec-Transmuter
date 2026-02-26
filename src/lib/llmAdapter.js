@@ -12,9 +12,6 @@ import {
   recommendHybridStacks as recommendHybridStacksDirect,
 } from './llmCore';
 
-// 이후 프록시 전환 시 이 상수를 기준으로 구현을 교체합니다.
-export const LLM_RUNTIME = 'direct-browser';
-
 export { SUPPORTED_MODEL_PROVIDERS, getProviderDisplayName };
 
 export async function fetchAvailableModels(apiKey, options = {}) {

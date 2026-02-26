@@ -99,7 +99,6 @@ function normalizeProfileInferenceRules(value) {
 
 const safePack = isObject(rawQuestionPack) ? rawQuestionPack : {};
 
-export const QUESTION_PACK_VERSION = String(safePack.version || '2').trim() || '2';
 export const PROJECT_PROFILE_QUESTIONS = normalizeProfileQuestions(safePack.profile_questions);
 export const PROFILE_VALUE_LABELS = normalizeProfileValueLabels(safePack.profile_value_labels);
 export const PROFILE_INFERENCE_RULES = normalizeProfileInferenceRules(safePack.profile_inference_rules);

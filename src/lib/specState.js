@@ -4,8 +4,8 @@
  * - 현재 단계에서는 기존 UI 상태를 유지하고, 동일 정보를 shadow write로만 기록합니다.
  */
 
-export const SPEC_STATE_VERSION = 1;
-export const SPEC_STATE_STORAGE_KEY = 'spec_state_v1';
+const SPEC_STATE_VERSION = 1;
+const SPEC_STATE_STORAGE_KEY = 'spec_state_v1';
 const MAX_HISTORY_LENGTH = 60;
 
 function isObject(value) {
@@ -47,7 +47,7 @@ export function createEmptySpecState() {
   };
 }
 
-export function normalizeSpecState(rawValue) {
+function normalizeSpecState(rawValue) {
   const raw = isObject(rawValue) ? rawValue : {};
   const currentNodeId = String(raw.current_node_id || '').trim() || 'root';
 
@@ -69,7 +69,7 @@ export function loadSpecStateFromSession() {
   }
 }
 
-export function persistSpecStateToSession(specState) {
+function persistSpecStateToSession(specState) {
   const normalized = normalizeSpecState(specState);
   try {
     sessionStorage.setItem(SPEC_STATE_STORAGE_KEY, JSON.stringify(normalized));

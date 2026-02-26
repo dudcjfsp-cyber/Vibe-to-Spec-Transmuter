@@ -2,104 +2,124 @@
 
 [English](README.md) | [한국어](README.ko.md)
 
-Vibe-to-Spec Transmuter is a beginner-focused requirement structuring assistant for:
+Vibe-to-Spec Transmuter is an educational, beginner-first requirement structuring app.
+It converts rough product ideas into implementation-ready specs, then guides users through tech choice and execution using a fixed L1-L5 learning flow.
 
-- non-developers
-- beginner vibe coders
-- non-CS learners
+## Design Intent
 
-It turns rough ideas into structured specs, supports stack decision guidance, and provides copy-ready handoff outputs.
+This project follows the layer model documented in [docs/beginner-layer-design.ko.md](docs/beginner-layer-design.ko.md):
 
-## What It Does
+1. **L1 Problem Interview**: structure the idea with `who/when/what/why/success` and generate 3 follow-up questions.
+2. **L2 Spec Structuring**: roles, features, 5-step flow, input fields, permission rules.
+3. **L3 Request Conversion**: convert to short/standard/detailed developer requests.
+4. **L4 Execution Validation**: completeness score, missing warnings, impact preview.
+5. **L5 Learning/Action**: 3 actionable next steps.
 
-1. User writes a rough request in plain language.
-2. AI converts it to a normalized standard output schema.
-3. User reviews results in dedicated views:
+Goal: reduce ambiguity for non-developers and beginner vibe coders before implementation starts.
+
+## Core User Flow
+
+1. User enters a rough vibe/requirement.
+2. App calls selected provider model (Gemini/OpenAI/Anthropic).
+3. Response is normalized into fixed `standard_output` shape.
+4. User reviews output in tabs:
    - Non-dev
    - Dev
    - Tech Choice
    - Thinking
    - Layers
    - Glossary
-4. User can open a combined Prompt/Dev Spec workspace and copy each output independently.
+5. User copies Prompt/Dev Spec outputs for handoff.
 
-## Current Key Features
+## Current Features
 
-### 1) Structured Spec Generation
+### 1) Multi-provider LLM support
 
-- Fixed schema normalization (`standard_output`) with compatibility handling.
-- One-time JSON repair retry when model output is malformed.
-- Output artifacts:
-  - `artifacts.nondev_spec_md`
-  - `artifacts.dev_spec_md`
-  - `artifacts.master_prompt`
-  - `layers.L1_thinking`
-  - `glossary`
+- Supported providers: `gemini`, `openai`, `anthropic`
+- Provider-specific model list fetch and generation routes
+- Provider + API-key-scoped model caching
+- One adapter entry for app-layer LLM calls (`src/lib/llmAdapter.js`)
 
-### 2) Hybrid Tech Choice Guide
+### 2) Robust schema normalization
 
-- Fixed decision frames:
-  - Option A: rapid validation frame
-  - Option B: balanced growth frame
-  - Option C: scale/operations frame
-- Dynamic stack candidates are generated per frame from user context.
-- Final recommendation ranking is deterministic in-app using weighted scoring:
+- Fixed schema normalization for UI safety
+- One-retry JSON repair when model output is malformed
+- Layer guide normalization now recovers combined blobs like `L1|L2|...` + `L1: ...`
+
+### 3) Hybrid Tech Choice Guide
+
+- Fixed decision frames: Option A / B / C
+- Dynamic stack candidates generated from input context
+- Deterministic in-app scoring:
   - Difficulty: 45
   - Cost: 35
   - Scalability: 20
-- Includes:
-  - 5-factor inferred profile (budget/timeline/team/users/data sensitivity)
-  - option comparison table
-  - top recommendation + fallback option
-  - copyable "recommended prompt"
+- Includes inferred profile rows (budget/timeline/team/users/data sensitivity)
 
-### 3) Prompt + Dev Spec Workspace
+### 4) Beginner reading modes
 
-- Quick action buttons near tabs:
-  - Prompt
-  - Dev Spec
-- Combined screen shows both outputs at once.
-- Separate copy buttons inside each panel.
+- Learning mode toggle:
+  - `ON`: shows Thinking tab with assumptions/questions/alternatives
+  - `OFF`: quick review focused on non-dev/dev outputs
+- Glossary navigation with flow-stage grouping and content-location linking
 
-### 4) Model Dropdown (Available Model Candidates)
+### 5) Session safety policy (BYOK)
 
-- Header includes a model selector dropdown.
-- The dropdown lists available Gemini models fetched from API.
-- Selected model is used for:
-  - main transmutation call
-  - hybrid stack recommendation call
-- If no explicit selection is made, the app still supports fallback model selection.
+- API keys are stored in `sessionStorage` only
+- TTL: 30 minutes
+- Key auto-expiry and re-entry prompt on timeout
+- Legacy Gemini key cleanup for backward compatibility
 
-### 5) Glossary Navigation
+### 6) Migration-ready internal boundaries
 
-- Flow-stage glossary cards with beginner/practical mode.
-- Term chips in content are clickable and sync with glossary cards.
-- "Locate in content" workflow is supported.
+- LLM call boundary: `llmAdapter` -> `llmCore`
+- Fixed session schema for migration prep:
+  - `answers`
+  - `current_node_id`
+  - `history`
+  - `version`
+- Question pack data separated to `src/data/question_pack_v2.json`
 
-### 6) Learning Mode
+## Output Contract (High-level)
 
-- `ON`: Thinking tab enabled (assumptions/questions/alternatives).
-- `OFF`: Thinking tab disabled for fast practical review.
+Main normalized payload is exposed as `standard_output` (and Korean alias key), with these core blocks:
 
-## API Key Policy
+- `문제정의_5칸`
+- `인터뷰_모드.추가_질문_3개`
+- `사용자_역할`
+- `핵심_기능`
+- `화면_흐름_5단계`
+- `입력_데이터_필드`
+- `권한_규칙`
+- `예외_모호한_점`
+- `리스크_함정_3개`
+- `테스트_시나리오_3개`
+- `오늘_할_일_3개`
+- `완성도_진단`
+- `수정요청_변환`
+- `변경_영향도`
+- `레이어_가이드`
 
-- Stored in `sessionStorage` only.
-- TTL: 30 minutes.
-- Auto-expire and prompt re-entry on timeout.
-- Legacy `localStorage` key cleanup is applied.
+Additional UI artifacts:
+
+- `artifacts.nondev_spec_md`
+- `artifacts.dev_spec_md`
+- `artifacts.master_prompt`
+- `layers.L1_thinking`
+- `glossary`
 
 ## Security Note
 
-This is still a client-side educational MVP architecture.
+This repository is still an educational client-side architecture.
 
-- AI calls happen from browser runtime.
-- API key is handled in browser session scope.
+- LLM requests are sent from browser runtime
+- User-provided API key is handled in browser session scope
 
 For production:
 
-- move to server-side proxy
-- keep API keys on server
-- add auth/rate-limit/audit controls
+1. move to thin backend proxy
+2. keep provider keys server-side
+3. add auth/rate-limit/audit controls
 
 ## Tech Stack
 
@@ -107,8 +127,8 @@ For production:
 - Vite 7
 - Tailwind CSS 4
 - Framer Motion
-- `@google/generative-ai`
-- `react-markdown` + `remark-gfm`
+- lucide-react
+- react-markdown + remark-gfm
 
 ## Local Development
 
@@ -134,12 +154,18 @@ npm run preview
 
 ```text
 src/
-  App.jsx         # Main UI, tabs, interaction, model dropdown, tech-choice UI
-  lib/llmCore.js  # Model calls, schema normalization, retry logic, hybrid stack recommendation
-  index.css       # Theme and markdown/table readability styles
-  main.jsx        # React entry point
+  App.jsx                    # Main UI and orchestration
+  data/question_pack_v2.json # Data-driven question pack
+  lib/llmAdapter.js          # App-facing LLM boundary
+  lib/llmCore.js             # Provider calls + normalization + retry
+  lib/questionPack.js        # Question-pack loader and fallback validation
+  lib/specState.js           # Fixed session schema helpers
+  index.css                  # Theme and readability styles
+  main.jsx                   # React entry
+docs/
+  beginner-layer-design.ko.md
 ```
 
 ## Status
 
-Active educational MVP under iterative refinement for beginner-friendly decision support.
+Active educational MVP. The project is being iterated to improve beginner readability, migration safety, and provider robustness without changing core UX flow.
