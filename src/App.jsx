@@ -261,8 +261,30 @@ function getApiKeySavedAtStorageKey(provider) {
   return `${API_KEY_SAVED_AT_STORAGE_PREFIX}_${normalizeProvider(provider)}`;
 }
 
+function getSpecStateAnswers() {
+  const specState = loadSpecStateFromSession();
+  return specState && typeof specState.answers === 'object' && !Array.isArray(specState.answers)
+    ? specState.answers
+    : {};
+}
+
+function getSpecStateAnswerString(key) {
+  const answers = getSpecStateAnswers();
+  return String(answers?.[key] || '').trim();
+}
+
 function getStoredProvider() {
+  const providerFromSpecState = getSpecStateAnswerString('api_provider').toLowerCase();
+  if (SUPPORTED_MODEL_PROVIDERS.includes(providerFromSpecState)) {
+    return providerFromSpecState;
+  }
   return normalizeProvider(sessionStorage.getItem(API_PROVIDER_STORAGE_KEY) || SUPPORTED_MODEL_PROVIDERS[0]);
+}
+
+function getStoredPreferredModel() {
+  const primary = getSpecStateAnswerString('last_model');
+  if (primary) return primary;
+  return getSpecStateAnswerString('last_hybrid_model');
 }
 
 function persistProviderToSession(provider) {
@@ -805,7 +827,7 @@ function App() {
   const [status, setStatus] = useState('idle');
   const [activeModel, setActiveModel] = useState('OFFLINE');
   const [modelOptions, setModelOptions] = useState([]);
-  const [selectedModel, setSelectedModel] = useState('');
+  const [selectedModel, setSelectedModel] = useState(getStoredPreferredModel);
   const [isModelOptionsLoading, setIsModelOptionsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copiedMaster, setCopiedMaster] = useState(false);
@@ -1042,6 +1064,8 @@ function App() {
       setModelOptions(uniqueModels);
       setSelectedModel((prev) => {
         if (prev && uniqueModels.includes(prev)) return prev;
+        const preferredFromSpecState = getStoredPreferredModel();
+        if (preferredFromSpecState && uniqueModels.includes(preferredFromSpecState)) return preferredFromSpecState;
         return uniqueModels[0] || '';
       });
     } catch {
