@@ -74,6 +74,68 @@ const QUICK_ACTION_BUTTONS = [
   { id: 'prompt', label: '프롬프트', icon: Zap },
   { id: 'spec', label: '개발 스펙', icon: Copy },
 ];
+const FIRST_USER_TEMPLATES = [
+  {
+    id: 'booking',
+    label: '예약 관리',
+    summary: '소규모 매장 예약 누락 방지',
+    content: `누가: 소규모 미용실 사장/직원
+언제: 오늘부터 바로 사용
+무엇을: 고객 예약 접수/변경/취소, 시간표 확인
+왜: 전화/메신저 예약이 섞여 누락이 자주 발생
+성공기준: 예약 누락 0건, 월간 예약 관리 시간 30% 감소
+필수기능: 예약 등록/수정/취소, 알림, 일별 캘린더
+제약: 초기 예산 낮음, 모바일 우선`,
+  },
+  {
+    id: 'internal-requests',
+    label: '사내 요청',
+    summary: '운영팀 요청 처리 흐름 정리',
+    content: `누가: 스타트업 운영팀/전직원
+언제: 2주 내 MVP 공개
+무엇을: 사내 요청(비품/IT지원/문서발급) 접수 및 처리
+왜: 요청 채널이 분산되어 처리 지연
+성공기준: 평균 처리시간 2일→1일
+필수기능: 요청 등록, 상태 변경, 담당자 배정, 히스토리
+제약: 관리자 2명, 권한 분리 필요`,
+  },
+  {
+    id: 'study-progress',
+    label: '학습 진도',
+    summary: '스터디 과제/진도 추적',
+    content: `누가: 온라인 스터디 운영자/참여자
+언제: 이번 달 내 오픈
+무엇을: 주차별 과제 제출과 진도율 시각화
+왜: 참여자별 진행 상황 파악이 어려움
+성공기준: 과제 제출률 20% 상승
+필수기능: 과제 등록, 제출 체크, 진도 대시보드, 리마인드
+제약: 비개발자 운영, 유지보수 쉬워야 함`,
+  },
+  {
+    id: 'community-qa',
+    label: '커뮤니티 Q&A',
+    summary: '반복 질문 감소',
+    content: `누가: 제품 사용자 커뮤니티 매니저/회원
+언제: 베타 사용자 대상 즉시
+무엇을: 질문 작성, 답변, 채택, 검색
+왜: 같은 질문 반복으로 운영 부담 증가
+성공기준: 중복 질문 30% 감소
+필수기능: 글 작성/댓글, 태그, 검색, 채택
+제약: 욕설/스팸 최소한의 필터 필요`,
+  },
+  {
+    id: 'order-inventory',
+    label: '주문/재고',
+    summary: '오배송/재고오차 축소',
+    content: `누가: 소형 온라인 스토어 운영자
+언제: 1달 내 도입
+무엇을: 주문 상태 추적과 재고 차감 자동화
+왜: 수기 엑셀 관리로 오배송/재고오차 발생
+성공기준: 오배송률 50% 감소
+필수기능: 주문 등록, 상태변경, 재고 차감, 재고 경고
+제약: 월 비용 낮게, 관리자/직원 권한 구분`,
+  },
+];
 const GUIDE_TONE_CLASS_MAP = {
   amber: 'border-amber-200 bg-amber-50 text-amber-800',
   blue: 'border-blue-200 bg-blue-50 text-blue-800',
@@ -1025,6 +1087,22 @@ function App() {
     }
   }, [apiProvider]);
 
+  const applyInputTemplate = useCallback((template) => {
+    if (!template?.content || status === 'processing') return;
+
+    const templateText = String(template.content || '').trim();
+    if (!templateText) return;
+
+    const currentText = vibe.trim();
+    if (currentText && currentText !== templateText) {
+      const shouldOverwrite = window.confirm('이미 입력된 내용이 있습니다. 템플릿으로 덮어쓸까요?');
+      if (!shouldOverwrite) return;
+    }
+
+    setVibe(templateText);
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [status, vibe]);
+
   // 텍스트 입력창 높이 자동 확장
   // 예시: 입력 줄이 늘어나면 textarea 높이도 함께 커집니다.
   useEffect(() => {
@@ -1661,6 +1739,29 @@ function App() {
           <div className={`rounded-lg border px-4 py-3 bg-white ${status === 'success' ? 'border-blue-300' : 'border-slate-200'}`}>
             <p className="text-[11px] font-semibold text-blue-700">3단계</p>
             <p className="text-sm text-slate-700">탭별 확인/수정</p>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-blue-700">빠른 시작 템플릿 (첫 사용자 추천)</p>
+            <p className="text-[11px] text-slate-500">버튼을 누르면 입력창에 예시가 채워집니다.</p>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {FIRST_USER_TEMPLATES.map((template) => (
+              <button
+                key={template.id}
+                onClick={() => applyInputTemplate(template)}
+                disabled={status === 'processing'}
+                title={template.summary}
+                className="
+                  px-3 py-2 text-xs rounded-md border border-blue-200 bg-blue-50 text-blue-700
+                  hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+                "
+              >
+                {template.label}
+              </button>
+            ))}
           </div>
         </div>
 
